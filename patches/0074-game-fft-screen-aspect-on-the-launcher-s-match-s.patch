@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vibe Code <vibe@mistral.ai>
+Date: Fri, 20 Nov 2026 16:13:45 +0000
+Subject: [PATCH] game/fft: screen_aspect on - the launcher's Match screen
+ makes the present take the wide 1920x888 swap chain
+
+Upstream-Status: fork-only
+Reason: this fork's product goal: FFT fills the 19.5:9 phone panel edge to edge; the 0070 cuts already render 1920x888 but with the switch unset the present fell back to 16:9 and pillarboxed it (device sessions 2026-11-20)
+Issue: fork-wide-aspect bring-up (patches/README.md); seedds/nxnative#3033
+
+---
+ dm/games/010038B015560000/README.md | 2 +-
+ dm/games/010038B015560000/game.tsv  | 8 ++++++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/dm/games/010038B015560000/README.md b/dm/games/010038B015560000/README.md
+index dd403309..8601f6a3 100644
+--- a/dm/games/010038B015560000/README.md
++++ b/dm/games/010038B015560000/README.md
+@@ -60,7 +60,7 @@ The panel in question is 2868x1320 (19.5:9 ≈ 2.17:1, wider than 16:9). The rou
+ 2. **Two pool gates** - every size past them died at `nvnMemoryPoolMap(NULL)` before these were found, and they are why the earlier forced-size builds crashed: `main+0xee9c`, the game's nn graphics pool reservation, 1280 -> 1792 MiB (the game drains the shared GPU pool during boot; the host builds the named pool in lazy chunks, so nothing commits up front), and `main+0xf1c4`, the game's own swapchain pool, 16 -> 32 MiB: its segment allocator (`main+0xad90`) cannot serve a 3-texture swapchain past 16 MiB, and the failed allocation is the null-pool crash. This was the missing piece in every earlier height-above-720 crash, 1920x882 included.
+ 3. **The wide-viewport cut.** The render-target/viewport builder (1.5.1: `main+0x8ecac`, size 0x238, cut at +0x6c/+0x78; 1.4.0: the same function at `main+0x7572c`) clamps any target wider than 16:9 to a 16:9 window of full height, centered (a pillarbox), and the clamped width becomes the projection aspect (`camera+0xcd8` from w25/w23). Two nops drop the clamp, keeping the full width, so the render target, aspect and UI offsets follow the picture; targets at or below 16:9 take the original path.
+ 
+-On 1.4.0 (`3cfd4578...`) this route ran on device at 1568x720 (2.178:1) with projection, FOV, HUD and touch following the picture. On 1.5.1 (`ace351a1...`) the 16:9 variant - the same four size sites at 1920x1080 (the binary also holds that literal at `0x38E38`/`0x3181F8`, the docked pair, though this route needs no redirect: the size writers are patched in place), both pools and the wake cut - sat at 59.9 fps across a whole session at crisp 1080p. All ten cuts are registered for `ace351a1...` in [patches.py](patches.py), the pair as **1920x888** (the 8-multiple height the 19.5:9 panel's shape takes at 1920 wide; the 16:9 1080p fallback swaps the two height encodings to `movk x8,#0x438,lsl#32`). `screen_aspect` stays off in this profile: the game's own projection computes from the pair and the host presents the wide swap chain directly - the switch only applies where a build has screen-shape stubs.
++On 1.4.0 (`3cfd4578...`) this route ran on device at 1568x720 (2.178:1) with projection, FOV, HUD and touch following the picture. On 1.5.1 (`ace351a1...`) the 16:9 variant - the same four size sites at 1920x1080 (the binary also holds that literal at `0x38E38`/`0x3181F8`, the docked pair, though this route needs no redirect: the size writers are patched in place), both pools and the wake cut - sat at 59.9 fps across a whole session at crisp 1080p. All ten cuts are registered for `ace351a1...` in [patches.py](patches.py), the pair as **1920x888** (the 8-multiple height the 19.5:9 panel's shape takes at 1920 wide; the 16:9 1080p fallback swaps the two height encodings to `movk x8,#0x438,lsl#32`). `screen_aspect` is on in this profile (0074): the game's own projection computes from the pair, and *Picture shape* (the iOS launcher's *Match screen*, offered because of the flag; its `auto` the front end resolves to the window's 19.5:9) makes the present take the wide swap chain's own shape (`mtl_present_screen` feeding `present_shape`, nvn_mtl.m). With the switch unset - the 2026-11-20 device sessions - the present fell back to the display's 16:9 and pillarboxed the 1920x888 frames, while the game itself already drew the wide picture. The build has no screen-shape stubs, so the state fields (+0x48..) go unread; the switch only drives the present layer here.
+ 
+ Open follow-ups, in order: the movies (the game letterboxes its own 16:9 movies; check they center on the wide picture), the touch layout at the taller picture (it followed the pair at 720 height on 1.4.0), and the messy textures in cutscenes and battle (see Open below).
+ 
+diff --git a/dm/games/010038B015560000/game.tsv b/dm/games/010038B015560000/game.tsv
+index 29e9600e..4d9a1f3e 100644
+--- a/dm/games/010038B015560000/game.tsv
++++ b/dm/games/010038B015560000/game.tsv
+@@ -34,6 +34,14 @@ zip_store	.dat:.tga:.usm:.metallib
+ tex_flush_upload	on
+ tex_dirty_upload	on
+ 
++# ---- Screen shape (0074) ----
++# The launcher's Picture shape (offered only with this line on; DM_GAME_SCREEN_ASPECT) defaults to "auto" on iOS, which the front end resolves to the
++# window's own ratio before the host writes the state page (front_ios.m startGame). On the 19.5:9 panel that is 2.17 wide: loader.c calls mtl_present_screen(1920, 880),
++# and present_shape (nvn_mtl.m) then takes the wide swap chain's own 1920x888 as the picture's shape (its 1 % tolerance covers the 8-multiple rounding; without the
++# switch the present fell back to the display's 16:9 and pillarboxed the wide frames - the 2026-11-20 device sessions). The widescreen cuts above make the game
++# render the wide pair itself, so its build has no screen-shape stubs and the state fields (+0x48..) go unread: the switch only drives the present layer here
++screen_aspect	on
++
+ # ---- Memory ----
+ # The NPDM declares no system resource: the game uses SetHeapSize, 3.13 GB (pool − used memory) in the 3.25 GB heap region of the 4 GB layout. On the Mac about 1.4 GB is resident in the opening
+ mem_reserve	0x100000000
