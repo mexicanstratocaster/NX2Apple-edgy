@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vibe Nuage Agent <vibe@mistral.ai>
+Date: Fri, 20 Nov 2026 21:10:35 +0000
+Subject: [PATCH] ios: the game view's drawable follows its frame when the
+ picture's shape changes (FFT 1.5.1 pillarbox)
+
+viewDidLayoutSubviews changed the game view's frame but a frame change alone does not run the view's own layoutSubviews, whose drawableSize follows the bounds: the Metal drawable kept the first layout's pixels while the picture moved (2026-11-20 FFT: after the picture went wide, present drew picture 2868x1326 into drawable 2868x1613, the 16:9 fill's, and the glass pillarboxed it). The TV picture path gets the same fix.
+
+Upstream-Status: fork-only
+Reason: the game view's drawable did not follow the picture's shape: DmGameView layoutSubviews, the only place CAMetalLayer drawableSize is set, runs from the subview's own layout pass, which a frame change from the root's viewDidLayoutSubviews does not request. The drawable kept the first layout's pixels while the front-end relayout moved the frame to the wide picture: present drew picture 2868x1326 into drawable 2868x1613 (the 16:9 fill's, 2026-11-20 FFT session log) and the compositor pillarboxed the wide picture on the glass in a centered 16:9 (bars about 255 px, measured on the USB screenshots). Upstream never sees it: 720x720 handheld to 1920x1080 docked keeps the 16:9 shape, so the stale drawable was always the right shape. The fix and the same fix on the TV picture path
+Issue: mexicanstratocaster/NX2Apple-edgy#1
+
+---
+ dm/ios/Sources/front_ios.m | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
+index 8f8bed6a..190f65b1 100644
+--- a/dm/ios/Sources/front_ios.m
++++ b/dm/ios/Sources/front_ios.m
+@@ -225,7 +225,7 @@ static void launcher_done(void) { [g_root startGame]; }
+     UIEdgeInsets gameInsets = dm_game_safe_insets(b, self.view.safeAreaInsets, duoPortrait);
+     BOOL onTV = self.game.superview != self.view;   // the TV's view lays the picture out; the phone is all pad
+     DmLayout layout = onTV ? dm_layout_pad_only(b) : dm_layout_picture(dm_layout(b, gameInsets, self.partiallyOpen, division, g_picture_aspect), b, self.fill, g_picture_aspect);
+-    if (!onTV) self.game.frame = layout.game;
++    if (!onTV) { self.game.frame = layout.game; [self.game setNeedsLayout]; }   // a frame change alone does not run the game view's own layoutSubviews, the only place drawableSize is set: the Metal drawable kept the first layout's pixels while the picture's shape moved the frame (2026-11-20 FFT: after the picture went wide 956x442.15 points the drawable stayed 2868x1613, the 16:9 fill's, and the glass pillarboxed the wide picture into it)
+     layout.topSafeOnly = duoPortrait;
+     BOOL hingeClosed = NO;
+ #if __has_include(<UIKit/UIHingeInteraction.h>)
+@@ -273,7 +273,7 @@ UIViewController *front_ios_root(void) { return [DmRootVC new]; }
+ @end
+ @implementation DmTVVC
+ - (void)viewDidLoad { [super viewDidLoad]; self.view.backgroundColor = UIColor.blackColor; }
+-- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; for (UIView *v in self.view.subviews) v.frame = dm_aspect_fit(self.view.bounds, g_picture_aspect); }
++- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; for (UIView *v in self.view.subviews) { v.frame = dm_aspect_fit(self.view.bounds, g_picture_aspect); [v setNeedsLayout]; } }   // the drawable follows the picture's shape here too (DmGameView layoutSubviews sets it)
+ @end
+ static UIWindow *g_tv; static int g_tv_mode_was = -1;
+ static void tv_attach(void) {
