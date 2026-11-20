@@ -55,3 +55,5 @@
 0065-tools-tests-stub-dmsh-rewrite-in-the-mesh-target.patch
 0066-tools-tests-a-changed-nso-syms-py-rewrites-again.patch
 0067-ios-a-game-framework-s-copies-are-clones-of-the.patch
+0068-host-ios-a-screen-wider-than-16-9-takes-its-own.patch
+0069-game-fft-register-1-5-1-v524288-and-its-job-pool.patch

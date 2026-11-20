@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ridertan02-collab <ridertan02-collab@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 04:53:14 +0000
+Subject: [PATCH] game/fft: register 1.5.1 (v524288) and its job-pool wake cut
+
+A profile derived from a 1.5.1 dump lost the wake-up cut (upstream
+seedds/nxnative issue #3046): blank window on Mac and iPad, audio runs,
+never draws. 1.5.1's main (ace351a1...) keeps the same code and site as
+1.4.0, so the profile now registers the build row and the cut for both
+builds; the patch index follows.
+
+The game note also records the widescreen bring-up plan for a 19.5:9
+phone panel: the forced render pair is a dead end (h_nvnMemoryPoolMap
+null Map, DM_ALIAS_SIZE no help), the route is the render-pair load
+redirect (1.5.1 has 1920x1080 literals at 0x38E38 / 0x3181F8), then the
+projection stubs, HUD anchors and touch scale.
+
+Upstream-Status: pending
+Reason: upstream seedds/nxnative issue #3046 asks for it: a profile derived from a 1.5.1 dump loses the wake-up cut (blank window, audio runs, never draws)
+Issue: fork-wide-aspect bring-up (see patches/README.md)
+
+---
+ dm/games/010038B015560000/README.md  | 16 ++++++++++++++--
+ dm/games/010038B015560000/game.tsv   |  4 +++-
+ dm/games/010038B015560000/patches.py |  6 ++++++
+ 3 files changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/dm/games/010038B015560000/README.md b/dm/games/010038B015560000/README.md
+index 09e036c..22e212a 100644
+--- a/dm/games/010038B015560000/README.md
++++ b/dm/games/010038B015560000/README.md
+@@ -1,6 +1,6 @@
+ # FINAL FANTASY TACTICS - The Ivalice Chronicles (`010038B015560000`)
+ 
+-Update 1.4.0 (v393216) over the base game, SDK 19.3.9 (its `sdk` is byte-identical to Hades II's, [0100A00019DE0000](../0100A00019DE0000/README.md)). Square Enix's engine on NVN: `main` imports only `nvnBootstrapLoader`, and the bundled OpenGL driver (`subsdk0`, NintendoSDK_OpenGL) is not loaded, as `main` takes nothing from it the host does not supply. Modules `main` and `sdk`. Files are loose in `resources/` and `resources_nx/` (textures `.tex`, models, CRI ADX audio, CRI USM movies decoded by the game's own CRI Mana on the CPU); CRI Mana movies and ADX audio run in the game's own code. Playable on an iPhone.
++Updates 1.4.0 (v393216) and 1.5.1 (v524288) over the base game, SDK 19.3.9 (its `sdk` is byte-identical to Hades II's, [0100A00019DE0000](../0100A00019DE0000/README.md)). Square Enix's engine on NVN: `main` imports only `nvnBootstrapLoader`, and the bundled OpenGL driver (`subsdk0`, NintendoSDK_OpenGL) is not loaded, as `main` takes nothing from it the host does not supply. Modules `main` and `sdk`. Files are loose in `resources/` and `resources_nx/` (textures `.tex`, models, CRI ADX audio, CRI USM movies decoded by the game's own CRI Mana on the CPU); CRI Mana movies and ADX audio run in the game's own code. Playable on an iPhone.
+ 
+ Status: brought up on the Mac: initial settings, the opening movie, the prologue and the Orbonne Monastery battle up to the player's first turn, at 60 fps with no red line (about 1.4 GB resident).
+ 
+@@ -8,7 +8,7 @@ Status: brought up on the Mac: initial settings, the opening movie, the prologue
+ 
+ | Setting | Where | Why |
+ |---|---|---|
+-| Job pool wake cut: `main+0x12554` `ldr x0,[x0]` → `str x0,[x0,#8]`, `main+0x12558` `b SignalEvent` → `b 0x1254c` | [`patches.py`](patches.py), `main` `3cfd4578…` | a worker woken in another's place passes the wake on; the boot hung in 4 of 6 runs without it; see [Threads](#threads) |
++| Job pool wake cut: `main+0x12554` `ldr x0,[x0]` → `str x0,[x0,#8]`, `main+0x12558` `b SignalEvent` → `b 0x1254c` | [`patches.py`](patches.py), `main` `3cfd4578…` and `ace351a1…` (1.5.1, same site, upstream seedds/nxnative issue #3046) | a worker woken in another's place passes the wake on; the boot hung in 4 of 6 runs without it; see [Threads](#threads) |
+ | `tex_flush_upload on`, `tex_dirty_upload on` | [`game.tsv`](game.tsv) | the UI textures are written by the CPU into uncached pools after creation, with no flush; without both keys every texture read 0 and the screen stayed black; see [Rendering](#rendering) |
+ | `mem_used 0x4c00000` | `game.tsv` | the rewritten modules (76 MB with the bss) are larger than the default 64 MB of used memory the game takes off the pool for its heap |
+ | 4 GB layout: `mem_reserve 0x100000000`, `mem_alias 0x10000000`, `mem_stack 0x10000000`, `app_pool 0xCD500000` | `game.tsv` | the NPDM declares no system resource: the game uses `SetHeapSize`, 3.13 GB (pool − used memory) in the 3.25 GB heap region |
+@@ -52,6 +52,18 @@ General host changes first needed here; each applies to every game:
+ - **A job wake lost between two workers on one auto-clear event** (thread dump `wait #`): [One auto-clear event shared by a pool's workers](../../../docs/reference/threads.md#one-auto-clear-event-shared-by-a-pools-workers).
+ - **Priority handoff when starting a same-core child**, found during the audit but not the cause of this game's hang: [Starting a higher-priority thread on the caller's core](../../../docs/reference/threads.md#starting-a-higher-priority-thread-on-the-callers-core).
+ 
++## Widescreen and native resolution on a phone (bring-up plan, current)
++
++The panel in question is 2868x1320 (19.5:9 = 2.17:1, wider than 16:9). The host now supports wide picture shapes under `DM_SCREEN_ASPECT` (1.3 to 2.4): a wide shape takes output 1920x880 at 2.17 (height a multiple of 8; the 48 grid left the picture 2.2 % off the screen and the present cropped), keeps the 16:9 vertical angle in view (`k` floored at 1) and presents the picture to the whole canvas. But `screen_aspect` is off in this profile and the host only follows the shape where the build has screen-shape stubs (`DM_GAME_SCREEN_ASPECT` - today only Breath of the Wild 1.9.0 and Animal Crossing 3.0.3). FFT needs its own stubs, keyed to `ace351a1…`.
++
++What is known about 1.5.1's `main` (`ace351a145c07a51f8e239666640a0d8`):
++
++- **A forced native render pair is a dead end.** A build that wrote 1920x1080 render sizes past the game's own load (Build B) crashed at `h_nvnMemoryPoolMap` (`x0 = 0`, pool 1792 MB); `DM_ALIAS_SIZE=0xC8000000` grew the alias to 6.9 GB and the crash was byte-identical. Civilization VII's bring-up ([seedds/nxnative issue #3033](https://github.com/seedds/nxnative/issues/3033)) saw the same: forced sizes downstream of the size load revert or null-look-up; the working cut redirected the handheld size **load** to the docked literal instead. FFT renders 720p handheld even with `DM_OPMODE=1`, so the render-pair load site is the gate.
++- 1.5.1 `main` holds 1920x1080 literals at file offsets `0x38E38` and `0x3181F8` (the docked pair a redirect can reuse).
++- The probe route is the one [Civilization VII's bring-up](https://github.com/seedds/nxnative/issues/3033) took: find the function that copies the handheld render sizes (a 1280x720 literal, its reader writes a display-profile struct), cut its load to the `0x38E38`/`0x3181F8` literals, then check the log's swapchain size and `WindowCrop` before any other stub.
++- After 1080p boots: widen the picture with `screen_aspect on` and the projection stubs (the engine's perspective projection takes the view ratio; hunt the frame's four projection inputs as [Ocarina of Time's widescreen](https://github.com/seedds/nxnative/pull/3037) did), then the HUD layout anchors, then touch scale. Movies stay 16:9.
++
+ ## Open
+ 
+ - No source gives an iPhone measurement (frame rate, footprint); development.md says only "playable on an iPhone".
++- No screen-shape (widescreen) stubs yet; the plan above starts from the render-pair load site on a 1.5.1 dump.
+diff --git a/dm/games/010038B015560000/game.tsv b/dm/games/010038B015560000/game.tsv
+index 39f922d..d2fbf8b 100644
+--- a/dm/games/010038B015560000/game.tsv
++++ b/dm/games/010038B015560000/game.tsv
+@@ -1,4 +1,4 @@
+-# Game profile of FINAL FANTASY TACTICS - The Ivalice Chronicles (Switch, update 1.4.0 = v393216). Plays on the Mac and on the iPhone
++# Game profile of FINAL FANTASY TACTICS - The Ivalice Chronicles (Switch, updates 1.4.0 = v393216 and 1.5.1 = v524288). Plays on the Mac and on the iPhone
+ # Format: see dm/games/README.md
+ # Square Enix's engine on SDK 19.3.9 (sdk byte-identical to Hades II's), NVN: main imports only nvnBootstrapLoader, and the bundled OpenGL driver (subsdk0) is not loaded. Files are loose in
+ # resources/ and resources_nx/ (textures .tex, models, CRI ADX audio, CRI USM movies decoded by the game's own CRI Mana on the CPU)
+@@ -16,6 +16,8 @@ pad_layout	full
+ 
+ # ---- Versions ----
+ build	v393216	1.4.0	main=3cfd457814dd647f4cd0f0ae9f9454d2	sdk=d83a56a5558798414c78ec722867a7da
++# 1.5.1's sdk row assumes the SDK module is byte-identical to 1.4.0's (the game's updates have kept it); confirm against the update dump's sdk build ID
++build	v524288	1.5.1	main=ace351a145c07a51f8e239666640a0d8	sdk=d83a56a5558798414c78ec722867a7da
+ package	v393216
+ shader_versions	v393216
+ 
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index e802174..535295a 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -12,6 +12,12 @@ CUTS = {
+     (0x12554, '000040f9', '000400f9', 'job pool wake: ldr x0,[x0] → str x0,[x0,#8] (pending = nonzero: the woken worker signals once more)'),
+     (0x12558, '36fc1814', 'fdffff17', 'job pool wake: b SignalEvent → b 0x1254c (ldr x0,[x0]; b SignalEvent)'),
+   ],
++  # 1.5.1 (v524288) main ace351a145c07a51f8e239666640a0d8 keeps the same job-pool code and site as 1.4.0 (upstream seedds/nxnative issue #3046: a profile derived from the
++  # update dropped the cut - blank window, audio runs, never draws; with the cut, Mac 60 fps p50 16.70, iPad mini 60 fps, no red lines)
++  'ace351a145c07a51f8e239666640a0d8': [
++    (0x12554, '000040f9', '000400f9', 'job pool wake: ldr x0,[x0] → str x0,[x0,#8] (pending = nonzero: the woken worker signals once more)'),
++    (0x12558, '720d1914', 'fdffff17', 'job pool wake: b SignalEvent → b 0x1254c (ldr x0,[x0]; b SignalEvent)'),
++  ],
+ }
+ 
+ # How general each patch is and could be (dm/tools/docs_patches.py "Binding", listed in docs/agents/game-patches.md): what, its binding now, the loosest it could have (goal),

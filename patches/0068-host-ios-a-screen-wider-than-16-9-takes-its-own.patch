@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ridertan02-collab <ridertan02-collab@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 04:53:03 +0000
+Subject: [PATCH] host/ios: a screen wider than 16:9 takes its own picture
+ shape
+
+DM_SCREEN_ASPECT now works in the wide direction (1.3 to 2.4): a wide
+shape keeps the output 1920 wide and takes the height 1920 / ratio as a
+multiple of 8 (2.17 -> 1920x880; the 48 grid left the picture 2.2 % off
+such a screen and the present cropped), the layout height stays 2/3 of
+it rounded, and a scene of the screen's ratio keeps the 16:9 vertical
+angle (k floored at 1: the sides widen instead of the view narrowing).
+The iOS front end's picture shape auto resolves a lying phone's window
+(19.5:9) instead of falling back to 16:9, and the launcher's Picture
+shape row offers 2.17 (iPhone screen, 19.5:9).
+
+Upstream-Status: fork-only
+Reason: this fork's product goal: games fill a 19.5:9 phone panel edge to edge; upstream #2609/#2891/#3042 carry the same direction
+Issue: fork-wide-aspect bring-up (see patches/README.md)
+
+---
+ dm/games/settings.tsv       |  2 +-
+ dm/host/loader.c            | 21 +++++++++++++--------
+ dm/ios/Sources/front_ios.m  |  8 ++++----
+ docs/reference/rendering.md |  2 +-
+ docs/settings.md            |  2 +-
+ 5 files changed, 20 insertions(+), 15 deletions(-)
+
+diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
+index 10af37e..aeb8194 100644
+--- a/dm/games/settings.tsv
++++ b/dm/games/settings.tsv
+@@ -37,7 +37,7 @@ DM_PAD_PRESS_TO_JOIN	toggle	-	0	always	Controls	Press a button to join
+ DM_SW2	toggle	-	0	platform:mac	Controls	Switch 2 controllers	Plays Joy-Con 2 and Pro Controller 2 over Bluetooth: hold Sync on one during the game to pair it. macOS asks once for Bluetooth access.
+ DM_MIC	toggle	-	0	mac-mic	Controls	Microphone	Lets the game hear your microphone. macOS asks for access when you launch with this enabled.	level=basic
+ DM_MIC_GAIN	range	1:8:0.5	4	mac-mic	Controls	Microphone gain		needs=DM_MIC=1
+-DM_SCREEN_ASPECT	choice	auto=Match screen?platform:ios,1.43=iPhone Duo screen (1.43:1),0=16:9 (Switch)	auto|0	DM_GAME_SCREEN_ASPECT!=0	Game	Picture shape	Renders about a quarter more pixels: a little slower and warmer.
++DM_SCREEN_ASPECT	choice	auto=Match screen?platform:ios,1.43=iPhone Duo screen (1.43:1),2.17=iPhone screen (19.5:9),0=16:9 (Switch)	auto|0	DM_GAME_SCREEN_ASPECT!=0	Game	Picture shape	Renders about a quarter more pixels: a little slower and warmer.
+ DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
+ DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4|1	gfxapi:nvn	Performance	Metal 4 pipelines	Keeps a pipeline archive; uses more memory.
+ DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.	needs=DM_PSO_MTL4=1
+diff --git a/dm/host/loader.c b/dm/host/loader.c
+index ed64a01..b494e32 100644
+--- a/dm/host/loader.c
++++ b/dm/host/loader.c
+@@ -351,22 +351,27 @@ void dm_fps_state_apply(void) {
+     const char *dr = getenv("DM_DYNAMIC_RESOLUTION"); uint32_t dyn = dr && !strcmp(dr, "1");
+     if (dr && strcmp(dr, "0") && strcmp(dr, "1")) LOG("[RED] DM_DYNAMIC_RESOLUTION=%s: must be 0 or 1; keeping full resolution", dr);
+     memcpy(dm_fps_state + 0x40, &dyn, sizeof dyn);
+-    // Screen shape: DM_SCREEN_ASPECT, the screen's width / height between 1.3 and 1.77, makes the builds with screen-shape stubs
+-    // (Breath of the Wild 1.9.0's patches.py) render that shape: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of 48 so the
+-    // 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
++    // Screen shape: DM_SCREEN_ASPECT, the screen's width / height between 1.3 and 2.4, makes the builds with screen-shape stubs
++    // (Breath of the Wild 1.9.0's patches.py) render that shape. Taller than 16:9 (an iPad's 1.33, an unfolded iPhone Duo's 1.43): the output keeps its width (1920) and
++    // takes the height that gives the ratio, a multiple of 48 so the 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. Wider than 16:9 (a lying
++    // phone's 19.5:9 ≈ 2.17): the height is 1920 / ratio rounded to a multiple of 8 instead (2.17 → 1920x880), since the 48 grid leaves the picture 2.2 % off a 2.17 screen and
++    // the present would crop. The layout height stays 2/3 of the output height, rounded. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
+     const char *as = getenv("DM_SCREEN_ASPECT");
+     if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9; auto: the iOS front end resolves it to the screen's shape (a Mac window has none)
+         char *end; float a = strtof(as, &end);
+-        if (end == as || *end || !(a >= 1.3f && a < 1.77f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as);
++        if (end == as || *end || !(a >= 1.3f && a < 2.4f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 2.4; keeping 16:9", as);
+         else {
+-            uint32_t oh = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48, lh = oh * 2 / 3; float lf = (float)lh;
++            int is_wide = a > 16.0f / 9.0f;
++            uint32_t oh = is_wide ? (uint32_t)(1920.0f / a / 8.0f + 0.5f) * 8 : (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48;
++            uint32_t lh = is_wide ? (uint32_t)((oh * 2 + 2) / 3) : oh * 2 / 3; float lf = (float)lh;
+             memcpy(dm_fps_state + 0x48, &oh, 4); memcpy(dm_fps_state + 0x4c, &lh, 4); memcpy(dm_fps_state + 0x50, &lf, 4);
+             extern void mtl_present_screen(uint32_t w, uint32_t h); mtl_present_screen(1920, oh);   // the picture's shape for a texture that follows it (nvn_mtl.m present_shape)
+             const char *ms = getenv("DM_SCREEN_ASPECT_SITES"); uint32_t mask = ms ? (uint32_t)strtoul(ms, NULL, 0) : 0xffffffffu;   // the stubs of the game's own conversions, one bit each (+0x54)
+             memcpy(dm_fps_state + 0x54, &mask, 4);
+             if (ms) LOG("%s: screen shape: conversion sites %#x (DM_SCREEN_ASPECT_SITES)", g_fps_mod, mask);
+-            // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below (patches.py's sead::PerspectiveProjection stubs)
+-            float r = 1920.0f / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f;
++            // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below; on a wider screen they keep the
++            // 16:9 vertical angle instead of narrowing (k = (16/9) / r, floored at 1: more at the sides, the same height in view) (patches.py's sead::PerspectiveProjection stubs)
++            float r = 1920.0f / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f; if (k < 1.0f) k = 1.0f;
+             const char *fo = getenv("DM_SCREEN_FOV"); if (fo && !strcmp(fo, "off")) tol = -1.0f;   // trials: the scene keeps the game's vertical angle (no view matches); the HUD camera still widens
+             memcpy(dm_fps_state + 0x58, &r, 4); memcpy(dm_fps_state + 0x5c, &k, 4); memcpy(dm_fps_state + 0x60, &tol, 4);
+             float wide = 16.0f / 9.0f, wtol = 0.001f, far = 10000.0f;   // the HUD camera's projection: 16:9, near 1, far 10000 (+0x74 / +0x78 / +0x7c)
+@@ -384,7 +389,7 @@ void dm_fps_state_apply(void) {
+             if (hv && sscanf(hv, "%f,%f,%f,%f,%f", &anc[2], &anc[3], &anc[4], &anc[5], &anc[6]) < 4) LOG("[RED] DM_SCREEN_HUD=%s: <edge>,<listed>,<full width>,<full height>[,<tallest>]; keeping the rest", hv);
+             memcpy(dm_fps_state + 0x80, anc, sizeof anc);
+             LOG("%s: screen shape: HUD moves out by %.0f (edge %.0f, listed widgets %.0f), panes %.0fx%.0f or larger stretched %.3f", g_fps_mod, anc[0], anc[2], anc[3], anc[4], anc[5], anc[1]);
+-            LOG("%s: screen shape %.3f: output 1920x%u, layout 1280x%u (DM_SCREEN_ASPECT; only builds with screen-shape stubs follow it)", g_fps_mod, a, oh, lh);
++            LOG("%s: screen shape %.3f%s: output 1920x%u, layout 1280x%u (DM_SCREEN_ASPECT; only builds with screen-shape stubs follow it)", g_fps_mod, a, is_wide ? " wide" : "", oh, lh);
+         }
+     }
+     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
+diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
+index 5bfde66..8f8bed6 100644
+--- a/dm/ios/Sources/front_ios.m
++++ b/dm/ios/Sources/front_ios.m
+@@ -177,13 +177,13 @@ static void launcher_done(void) { [g_root startGame]; }
+     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
+     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
+     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
+-    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1; loader.c
+-        // takes 1.3 to 1.77), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved here, before the
+-        // host writes the state page (main.c dm_fps_state_apply)
++    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is not 16:9 (an iPad's 4:3 and an unfolded iPhone Duo's 1.43:1 taller, a lying
++        // phone's 19.5:9 ≈ 2.17 wider; loader.c takes 1.3 to 2.4), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not
++        // fill the screen. Resolved here, before the host writes the state page (main.c dm_fps_state_apply)
+         const char *a = getenv("DM_SCREEN_ASPECT");
+         if (a && !strcmp(a, "auto")) {
+             CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size; double r = MAX(sz.width, sz.height) / MAX(MIN(sz.width, sz.height), 1);
+-            char v[16]; if (r >= 1.3 && r < 1.77) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
++            char v[16]; if (r >= 1.3 && r < 2.4) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
+             setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%.3f:1) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, r, v);
+         }
+     }
+diff --git a/docs/reference/rendering.md b/docs/reference/rendering.md
+index a45d247..47ad794 100644
+--- a/docs/reference/rendering.md
++++ b/docs/reference/rendering.md
+@@ -897,7 +897,7 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
+ 
+ - **Symptom:** a scene turns narrow, with black bars at its sides, while the swapchain or window textures keep their size; circles come out as tall ovals. The log has `vi::SetLayerCrop 0,0 1200x960` and `present upscaling: ... 1200x960 → 1800x1440` in a 2560x1440 window.
+ - **Cause:** the present used one rectangle for two things: which texels to read and the shape to show them in. On the Switch the compositor stretches a buffer's crop to the layer, so a game can draw an anamorphic picture into a crop of another shape: 1200x960 of a 1920x1080 swapchain docked, 800x640 handheld. The host fitted the crop's own 5:4 into the canvas, and reported 5:4 to the front ends.
+-- **Fix:** the crop still selects the source texels, for every graphics API, and `present_shape` (`nvn_mtl.m`) gives the shape: the display's 16:9, or a sized layer's (`vi::CreateLayer` with a size, `mtl_present_layer`). A screen taller than 16:9 (`DM_SCREEN_ASPECT`, `mtl_present_screen`) counts only for a texture of its shape, since only builds with screen-shape stubs render it. Both encoders, MetalFX, the screen-sized captures and the shape reported to the front ends (`front_picture_shape`) use it, so a canvas of another shape still gets bars around a 16:9 picture and clicks map onto the picture as drawn. `vi::SetLayerScalingMode` stays ignored: the games seen set mode 2 or none.
++- **Fix:** the crop still selects the source texels, for every graphics API, and `present_shape` (`nvn_mtl.m`) gives the shape: the display's 16:9, or a sized layer's (`vi::CreateLayer` with a size, `mtl_present_layer`). A screen taller or wider than 16:9 (`DM_SCREEN_ASPECT`, `mtl_present_screen`) counts only for a texture of its shape, since only builds with screen-shape stubs render it. Both encoders, MetalFX, the screen-sized captures and the shape reported to the front ends (`front_picture_shape`) use it, so a canvas of another shape still gets bars around a 16:9 picture and clicks map onto the picture as drawn. `vi::SetLayerScalingMode` stays ignored: the games seen set mode 2 or none.
+ - **Check:** `t_present_crop`: a 5:4 crop fills a 16:9 canvas and keeps bars on a 16:10 one on the classic and Metal 4 presents, a sized layer's shape, both `DM_SCREEN_ASPECT` cases and the shape a real present reports.
+ - **Found on:** [Super Mario Galaxy 2](../../dm/games/0100FD8022DAA000/README.md#rendering) ([issue #949](https://github.com/seedds/nxnative/issues/949)).
+ 
+diff --git a/docs/settings.md b/docs/settings.md
+index bc8835e..68b3a21 100644
+--- a/docs/settings.md
++++ b/docs/settings.md
+@@ -299,7 +299,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under
+ | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
+ | Cloud saves folder (Mac) | `DM_SAVE_SYNC` | a folder; `icloud`: iCloud Drive › nxnative Saves; `0`: off |
+ | Picture (iPhone and iPad) | `DM_PICTURE_FIT` | `fit` 16:9 with black bars, `fill` covers the screen, cropped |
+-| Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9 (iOS only); `1.43` the iPhone Duo's shape, `0` 16:9 |
++| Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is not 16:9 (iPad 4:3 and iPhone Duo 1.43:1 taller, a lying iPhone 19.5:9 wider), else 16:9 (iOS only); `1.43` the iPhone Duo's shape, `2.17` a lying iPhone's wider shape, `0` 16:9 |
+ | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |
+ | Mix with other audio | `DM_AUDIO_MIX` | `1`, `0` |
+ | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
