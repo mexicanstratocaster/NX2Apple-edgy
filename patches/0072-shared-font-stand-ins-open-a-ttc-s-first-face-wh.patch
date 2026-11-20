@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mexicanstratocaster <mexicanstratocaster@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 08:59:17 +0000
+Subject: [PATCH] shared-font stand-ins: open a TTC's first face when the
+ standard font is a collection
+
+Upstream-Status: pending (candidate for LNPANDY/NX2Apple)
+Reason: the Windows dependency chain picks msyh.ttc (Microsoft YaHei) as the shared-font stand-in source when Arial
+ Unicode is absent, and `TTFont()` cannot open a TrueType Collection: every Windows build of any game aborted in
+ `make_shared_fonts.cut` with fontTools' TTLibFileIsCollectionError before the IPA was packed. The collection's first
+ face carries the CJK coverage the font chooser picked the file for.
+Issue: LNPANDY/NX2Apple (no issue filed yet; found building FFT 1.5.1 on Windows with the NSPB Qt front end)
+
+---
+ dm/tools/make_shared_fonts.py | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/dm/tools/make_shared_fonts.py b/dm/tools/make_shared_fonts.py
+index f9d4c69b..3cb47853 100644
+--- a/dm/tools/make_shared_fonts.py
++++ b/dm/tools/make_shared_fonts.py
+@@ -8,7 +8,7 @@ holds the characters of its type only, as Nintendo's set splits them; each takes
+ Usage: make_shared_fonts.py out_dir [source.ttf]; needs fontTools (pip install fonttools)"""
+ import os, sys
+ from fontTools import subset
+-from fontTools.ttLib import TTFont
++from fontTools.ttLib import TTFont, TTLibFileIsCollectionError
+ 
+ SOURCE = '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'   # macOS's; STD_FONT / the second argument names another (build_ipa.sh, the NSP script)
+ LETTERS = '/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf'   # the button icons' letters (make_ext_font.py)
+@@ -45,7 +45,10 @@ def charsets():
+     }
+ 
+ def cut(src, out, chars, name):
+-    f = TTFont(src)
++    try:
++        f = TTFont(src)
++    except TTLibFileIsCollectionError:   # a TTC on Windows (msyh.ttc): its first face is the coverage the font chooser picked the file for
++        f = TTFont(src, fontNumber=0)
+     have = sorted(c for c in chars if c in (f.getBestCmap() or {}))
+     # No hinting: its program sizes the engine's interpreter memory (Arial Unicode: 4,139 stack elements, a 9 KB prep). Of the layout tables only kerning: GSUB's forms grow the tables and the glyph count
+     o = subset.Options(hinting=False, layout_features=['kern'], name_IDs=['*'], name_languages=['*'], notdef_outline=True, recalc_bounds=True)
