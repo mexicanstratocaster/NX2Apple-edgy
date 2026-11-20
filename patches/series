@@ -60,3 +60,4 @@
 0070-game-fft-the-widescreen-cut-set-for-1-5-1-1920x8.patch
 0071-nvn-dm-nvn-sampler-sub-stands-a-sampler-id-in-fo.patch
 0072-shared-font-stand-ins-open-a-ttc-s-first-face-wh.patch
+0073-fft-persist-the-v524288-shader-tables.patch

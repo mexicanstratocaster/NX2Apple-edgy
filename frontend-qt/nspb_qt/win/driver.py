@@ -296,7 +296,7 @@ class _WinProcGroup:
     """
 
     GRACE = 5.0
-    DRAIN = 5.0
+    DRAIN = 90.0
     REAP = 0.5
     TICK = 0.02
 
