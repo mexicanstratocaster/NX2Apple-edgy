@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tanori-rider <rtanori1@asu.edu>
+Date: Fri, 20 Nov 2026 18:08:34 -0700
+Subject: [PATCH] game/fft: the bake's pair load and the layer-composition rect
+ push observe the pillarbox too (0078)
+
+The device sessions of 2026-11-21, a battle included, left every 0077 gate cleared: the letterbox fitter's compare/select never ran (PB_RECT 0; its 1329/2320 calls all pass small UI rects), the post-cut wide-viewport branch never entered (VP_CLAMP 0 - no render target ever arrives wider than 16:9), and the camera's aspect is 2.162 (CAM). With the static search exhausted - the only in-binary materializers of a 16:9 width are the four known sites (the fitter 0x45f914/0x45f97c, the RT builder 0x8ed00, the camera fallback 0xdc5d4), none live - the confinement must be integer/pair-driven composition or explicit bar UI. Two more read-only gates record the two uninstrumented numeric sites the search left standing on the present path: the bake's settings-pair load (main+0x3bd30, ldp w3,w4,[x20]) and the layer-composition rect push (main+0xe48f8, its rect from w1-w4) (TBK_PAIR / ELY_RECT in Documents/pillarbox_probe.txt).
+
+Upstream-Status: fork-only
+Reason: The pillarbox hunt: with the 0077 gates cleared by the device (a battle included), the only in-binary 16:9 materializers are the four already-cleared sites, so the confinement must be integer/pair composition or explicit bar UI. Two more read-only observation gates (TBK_PAIR at main+0x3bd30, the settings pair the bake's create vcall receives; ELY_RECT at main+0xe48f8, the layer-composition rect push) record the two uninstrumented numeric sites on the present path; host side dm/host/hle_pillarbox.c (Documents/pillarbox_probe.txt, 60 MB cap)
+Issue: mexicanstratocaster/NX2Apple-edgy#1
+
+---
+ dm/games/010038B015560000/patches.py | 12 ++++++++----
+ dm/host/dm.h                         |  4 +++-
+ dm/host/hle_pillarbox.c              | 25 +++++++++++++++++++++++--
+ 3 files changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index aaa9440..5ca9467 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -50,14 +50,18 @@ CUTS = {
+ # Observation gates (host callbacks in dm/host/hle_pillarbox.c, numbers as there/dm.h): with the wide-viewport clamp cut, the picture still reaches the screen confined to a
+ # centered 16:9 (a 1578.67x888 content rect inside the 1920x888 texture, host-side; the PC shader fix's five-piece answer names the remaining candidates), so these record what
+ # the four candidate places see at run time until one run names where the confinement is made. One tab-separated line per hit in Documents/pillarbox_probe.txt (PB_CALL / PB_RECT /
+-# VP_CLAMP / CAM tags), truncated at 60 MB. The original word is the value here at the rewrite: 0x8ed18's is the nop the cut above writes (a gate may sit on a cut's site, the
+-# allocator constructor's does), the others' are 1.5.1's own instructions
++# VP_CLAMP / CAM / TBK_PAIR / ELY_RECT tags), truncated at 60 MB. The original word is the value here at the rewrite: 0x8ed18's is the nop the cut above writes (a gate may sit on
++# a cut's site, the allocator constructor's does), the others' are 1.5.1's own instructions. RevE: the first four (a 2026-11-21 battle session included) left every site cleared -
++# the fitter's clamp never ran, the wide-viewport branch never entered, the camera's aspect is 2.162 - so two more record the only uninstrumented numeric gates the static search
++# left on the present path: the bake's settings-pair load (TBK_PAIR) and the layer-composition rect push (ELY_RECT)
+ OBS = {
+   'ace351a145c07a51f8e239666640a0d8': [
+     (0x46f2b0, 27, 'f9400102', "pillarbox: the letterbox fitter main+0x45f7d0's one non-null-rect call (bl main+0x46f2b4): x0-x5 and the 16 bytes at [x5], the input rect"),
+     (0x45f988, 28, '1e230101', "pillarbox: the fitter's compare/select block, s0-s5 (the content pair converted and the clamped output pair with its offsets) and the integer pair w8/w11"),
+     (0x8ed18, 29, 'd503201f', "pillarbox: the wide-viewport branch after the cuts above, w23/w24/w25 (the target triple) and s0-s3 (the converted pair, the clamp constant, the product)"),
+     (0xdc5dc, 30, 'd29ae149', 'pillarbox: before the camera aspect store (str s0,[x20,#0xcd8] at +8): the camera x20, the aspect stored before, and the first-layer chain [x19+0x4d00]+0x30'),
++    (0x3bd30, 31, '29401283', 'pillarbox: the bake\'s settings-pair load (ldp w3,w4,[x20]) that feeds the item\'s create vcall: the pair at x20 - a (1578, 888) pair here is the confiner'),
++    (0xe48f8, 32, '290127e8', 'pillarbox: at the layer-composition rect push (before its bl), which is made from w1-w4 as (x,y)-(x+w,y+h) - the last stp of the rect; a width near 171 for an 888-tall layer is the pillarbox\'s own bar'),
+   ],
+ }
+ 
+@@ -74,6 +78,6 @@ BINDING = [
+      'why': "the render-target builder clamps its width to height \u00d7 16:9 and centers it, so the render size alone cannot widen the picture",
+      'blocked': 'the site would need a fingerprint rule (the 0x238-byte builder or its 8-instruction wider-than-16:9 branch) to move to another build',
+      'checked': "1.5.1's bytes at both cut sites are identical to 1.4.0's (main+0x8ecac / main+0x7572c, cut at +0x6c/+0x78); on 1.4.0 this ran on device at 1568x720 with projection, FOV, HUD and touch following the picture"},
+-    {'what': "the four pillarbox observation gates (the letterbox fitter main+0x45f7d0's caller and compare block, the wide-viewport branch after the cuts, the camera aspect store)", 'now': 'build', 'goal': 'unreviewed', 'purpose': 'rendering',
+-     'why': "diagnostic, not a fix: the wide-viewport clamp is cut and every host stage runs wide (1920x888), yet the content is still a centered 16:9, so someone else confines it; these record what each candidate sees until a run names the one that does"},
++    {'what': "the six pillarbox observation gates (the letterbox fitter main+0x45f7d0's caller and compare block, the wide-viewport branch after the cuts, the camera aspect store, the bake's settings-pair load, the layer-composition rect push)", 'now': 'build', 'goal': 'unreviewed', 'purpose': 'rendering',
++     'why': "diagnostic, not a fix: the wide-viewport clamp is cut and every host stage runs wide (1920x888), yet the content is still a centered 16:9, so someone else confines it; these record what each candidate sees until a run names the one that does. The device sessions of 2026-11-21, a battle included, cleared the first four (the fitter's clamp never ran, the wide branch never entered, the camera's aspect is 2.162), so revE adds the two the static search left standing"},
+ ]
+diff --git a/dm/host/dm.h b/dm/host/dm.h
+index 7f2ccbf..7b9376e 100644
+--- a/dm/host/dm.h
++++ b/dm/host/dm.h
+@@ -141,7 +141,9 @@ enum { OBS_UE_MALLOC = 21,                                       // Unreal's FMa
+        OBS_PILLARBOX_RECT = 28,                                        // FFT 1.5.1 ace351a1: main+0x45f988, the fitter's compare/select block, its s0-s5 (target and output rect floats) and w8/w11 (hle_pillarbox.c)
+        OBS_VIEWPORT_CLAMP = 29,                                        // FFT 1.5.1 ace351a1: main+0x8ed18, the wide-viewport branch after the profile's cuts, w23/w24/w25 and s0-s3 (hle_pillarbox.c)
+        OBS_CAMERA_ASPECT = 30,                                         // FFT 1.5.1 ace351a1: main+0xdc5dc, before the camera aspect store str s0,[x20,#0xcd8], and the first-layer pointer chain at [x19+0x4d00]+0x30 (hle_pillarbox.c)
+-       OBS_MAX = 31 };
++       OBS_TBK_PAIR = 31,                                              // FFT 1.5.1 ace351a1: main+0x3bd30, the ldp w3,w4,[x20] that loads the width/height pair the bake's create vcall receives: the pair at x20 (hle_pillarbox.c)
++       OBS_ELY_RECT = 32,                                              // FFT 1.5.1 ace351a1: main+0xe48f8, at the composition-rect push's last stp (stp w8,w9,[sp,#8] makes (x+w,y+h) from w1-w4): the four arguments (hle_pillarbox.c)
++       OBS_MAX = 33 };
+ // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
+ // effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT and OBS_UE_REGION do
+ void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
+diff --git a/dm/host/hle_pillarbox.c b/dm/host/hle_pillarbox.c
+index 77a4cb1..2de0b17 100644
+--- a/dm/host/hle_pillarbox.c
++++ b/dm/host/hle_pillarbox.c
+@@ -1,8 +1,11 @@
+ // Observation of FFT 1.5.1's pillarbox (final fantasy tactics - the ivalice chronicles, main ace351a145c07a51f8e239666640a0d8). The profile's registered cuts kill the
+ // wide-viewport clamp (main+0x8ed18 / +0x8ed24), yet the picture still reaches the screen confined to a centered 16:9 (a 1578.67x888 content rect in 1920x888, measured on the
+-// device), so another place confines it. Four observation gates (the profile's patches.py OBS, numbered in dm.h) record what the four candidates see, one tab-separated line per
++// device), so another place confines it. The device sessions with the first four (2026-11-21, a battle included) left every one of them cleared: the fitter's compare/select never
++// ran (PB_RECT 0, its 1329/2320 calls all pass small UI rects), the wide-viewport branch after the cuts never entered (VP_CLAMP 0: no render target arrives wider than 16:9), and the
++// camera's aspect is 2.162 (CAM). Six observation gates now record what the candidates see, one tab-separated line per
+ // hit in Documents/pillarbox_probe.txt: the letterbox fitter's caller (its arguments and the input rect), the fitter's compare/select block (its target and output floats), the
+-// wide-viewport branch after the cuts (the target triple and the clamped floats) and the camera aspect store (the aspect and the first-layer pointer chain). Read-only: a
++// wide-viewport branch after the cuts (the target triple and the clamped floats), the camera aspect store (the aspect and the first-layer pointer chain), the bake's settings-pair
++// load (the width/height pair the item's create sees) and the layer-composition rect push (the rect a layer is made across). Read-only: a
+ // callback changes no register, so the game runs as without them. Diagnostic for the fork's wide-aspect work; the size cap on the file keeps a long session bounded
+ #include "dm.h"
+ #include <errno.h>
+@@ -91,7 +94,25 @@ static void pb_camera(uint64_t *r, int param) {
+             PB_LL(r[19]), PB_LL(r[20]), pb_f32(aspect), !layer, !first);
+ }
+ 
++// The bake's settings-pair load: main+0x3bd30, ldp w3,w4,[x20] - the width/height pair as the settings hand it to the item's create vcall (x20 is the pair's address). RevE: with
++// the wide-viewport branch provably never taken, this is the only uninstrumented numeric gate left on the present path; a (1578, 888) pair here is the confiner
++static void pb_tbk_pair(uint64_t *r, int param) {
++    (void)param;
++    uint32_t pair[2] = {0, 0};
++    pb_mem((const void *)(uintptr_t)r[20], sizeof pair, pair);
++    pb_line("TBK_PAIR", "x20 %llx\t[%u %u]\tw3 %u\tw4 %u", PB_LL(r[20]), pair[0], pair[1], (uint32_t)r[3], (uint32_t)r[4]);
++}
++
++// The layer-composition rect push: main+0xe48f8, the last stp of the rect (stp w22,w21,[sp] is (x,y) = (w1,w2); stp w8,w9,[sp,#8] is (x+w,y+h) from
++// w8 = w1+w3, w9 = w2+w4), just before the bl that carries it - the four arguments as they entered the function. Candidate UI-bar site (the profile's fitter is UI-only; the
++// composition rect is how a layer's destination is recorded) - a row whose width sits near 171 for an 888-tall layer is the pillarbox's own bar
++static void pb_ely_rect(uint64_t *r, int param) {
++    (void)param;
++    pb_line("ELY_RECT", "w1 %u\tw2 %u\tw3 %u\tw4 %u", (uint32_t)r[1], (uint32_t)r[2], (uint32_t)r[3], (uint32_t)r[4]);
++}
++
+ __attribute__((constructor)) static void pillarbox_attach(void) {
+     gate_obs_set(OBS_PILLARBOX_CALL, pb_call); gate_obs_set(OBS_PILLARBOX_RECT, pb_rect);
+     gate_obs_set(OBS_VIEWPORT_CLAMP, pb_clamp); gate_obs_set(OBS_CAMERA_ASPECT, pb_camera);
++    gate_obs_set(OBS_TBK_PAIR, pb_tbk_pair); gate_obs_set(OBS_ELY_RECT, pb_ely_rect);
+ }
