@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mexicanstratocaster <mexicanstratocaster@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 07:09:59 +0000
+Subject: [PATCH] nvn: DM_NVN_SAMPLER_SUB stands a sampler ID in for another
+ (issue #2275's FFT 768)
+
+Upstream-Status: fork-only (candidate for seedds/nxnative)
+Reason: a diagnostic the FFT bring-up needs on this fork: seedds/nxnative issue #2275's every-third-frame movie/sprite streaks track one unregistered sampler ID, and a build standing 768 in for 256 drew right on 1.5.0; the switch keeps it opt-in and off by default while the real registration path is hunted
+Issue: seedds/nxnative#2275
+
+---
+ dm/gfx/nvn/nvn_mtl.m | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index f6272a6e..99e10d29 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -13020,10 +13020,33 @@ static int sampu_id(int stage, const nvn_rbind *b, int k) {
+ }
+ // The sampler ID a sampler binding reads in the current state: SAMPT the sampler part of a combined handle (texture ID | sampler ID << 20), SAMPU the same with the handle in a uniform buffer,
+ // SAMPI a sampler ID the shader names as a constant
++// DM_NVN_SAMPLER_SUB=<from>=<to>,... stands a sampler ID in for another after the lookup: FINAL FANTASY TACTICS's drivers read an ID its pool never registered (one
++// `[RED] sampler ID 768 not registered` a session, seedds/nxnative issue #2275: every third frame of the CRI Mana movies and in-engine sprites streaked; a build that
++// answered 768 with 256 drew right). A tool of last resort: an unregistered ID means the host missed a registration path, and this only hides one ID
++static int g_sid_sub[16][2];
++static int g_sid_sub_n = -1;
++static int sid_sub(int sid) {
++    if (g_sid_sub_n < 0) {
++        g_sid_sub_n = 0;
++        const char *e = getenv("DM_NVN_SAMPLER_SUB"), *p = e;
++        while (p && *p && g_sid_sub_n < 16) {
++            char *end; unsigned long from = strtoul(p, &end, 0);
++            if (end == p || *end != '=') break;
++            unsigned long to = strtoul(end + 1, &end, 0);
++            if (from > 0xffff || to > 0xffff) MLOG("[RED] DM_NVN_SAMPLER_SUB: %lu=%lu out of range, dropped", from, to);
++            else { g_sid_sub[g_sid_sub_n][0] = (int)from; g_sid_sub[g_sid_sub_n][1] = (int)to; g_sid_sub_n++; }
++            p = *end == ',' ? end + 1 : end;
++        }
++        if (g_sid_sub_n) MLOG("DM_NVN_SAMPLER_SUB: %d sampler ID%s stood in for another", g_sid_sub_n, g_sid_sub_n == 1 ? "" : "s");
++    }
++    for (int i = 0; i < g_sid_sub_n; i++) if (g_sid_sub[i][0] == sid) return g_sid_sub[i][1];
++    return sid;
++}
+ static int bind_sid(int nvn_stage, const nvn_rbind *b) {
+     int reg = b->reg;
+-    return b->kind == NVN_RB_SAMPU ? sampu_id(nvn_stage, b, -1) :
++    int sid = b->kind == NVN_RB_SAMPU ? sampu_id(nvn_stage, b, -1) :
+            b->kind == NVN_RB_SAMPI ? ubo_samp_id((uint32_t)reg << 20) : b->kind == NVN_RB_SAMPT ? (reg < NTEX ? (int)(bound_handle(S.tex[nvn_stage][reg]) >> 20) : 0) : reg < 128 ? (int)(bound_handle(S.samp[nvn_stage][reg]) >> 20) : 0;
++    return g_sid_sub_n ? sid_sub(sid) : sid;
+ }
+ // Whether a draw of sh binds a sampler with a twin (dmsh_rewrite.py border_emu, nvn_border.h), whose samples it must correct: then its pipeline keeps the corrections (pso_key.border),
+ // otherwise it is specialized without them (fn_off). Inspect the registered parameters: the pipeline is chosen before encode_args creates Metal samplers, including their twins

@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tanori-rider <rtanori1@asu.edu>
+Date: Sat, 21 Nov 2026 01:51:56 -0700
+Subject: [PATCH] FFT: zero the fitter's path-B centering offset for battle
+ rects
+
+widefix10 left rect A and FIT_A full-width but FIT_B at (144,0,1776,888): the fitter's path-B offset (w2-w1)/2 = (1920-1632)/2 still centers the battle layer. Follow the fitter's own width chain (0x431c0 with w1=0, 0x41220, 0x3f954) to the u16 at [p3+0x48] for both objects and set them to 1920; widen rect B at [x6] only after both writes succeed, so a failed width write cannot push its right edge to 2064. Read the real x2 object from [r[8]] because the gate runs before the original ldr x2,[x8]. Keep the >=1500 width gate so UI rects are untouched (the earlier blanket gate caused darkness). Also raise the second object's aspect constant to 2.162 and extend DEBUG with both width fields and write results.
+
+Upstream-Status: fork-only
+Reason: FFT 1.5.1 battle picture was still confined to a centered 1632-wide rect (144 px bars) after rect A was widened. Zero the fitter's path-B centering offset by setting both objects' u16 width fields to 1920 and widening rect B only after both writes succeed; tighten the gate to battle-width rects so UI overlays keep their dims (no darkness). Fork product goal: edge-to-edge on a 19.5:9 iPhone panel.
+Issue: mexicanstratocaster/NX2Apple-edgy#1
+
+---
+ dm/games/010038B015560000/patches.py |  5 +-
+ dm/host/dm.h                         |  2 +-
+ dm/host/hle_pillarbox.c              | 85 +++++++++++++++++++++++++---
+ 3 files changed, 81 insertions(+), 11 deletions(-)
+
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index 5fa961e..a70178d 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -55,6 +55,9 @@ CUTS = {
+     (0x4e2a8, '0a5ac0f2', '0a6fc0f2', 'bake record size pair, the growth copy of 0x4e20c: movk x10,#0x2d0,lsl#32 (height 720) → movk x10,#0x378,lsl#32 (height 888)'),
+     (0x45f918, '2cc79152', 'ac1b8c52', 'fitter aspect constant: mov w12,#0x8e39 (16/9 low) → mov w12,#0x60dd (2.162 low, the picture ratio 1920/888)'),
+     (0x45f91c, '6cfca772', '4c01a872', 'fitter aspect constant: movk w12,#0x3fe3,lsl#16 (16/9 high) → movk w12,#0x400a,lsl#16 (2.162 high)'),
++    (0x45f978, '29c79152', 'a91b8c52', 'fitter aspect constant (2nd object): mov w9,#0x8e39 (16/9 low) → mov w9,#0x60dd (2.162 low)'),
++    (0x45f97c, '69fca772', '4901a872', 'fitter aspect constant (2nd object): movk w9,#0x3fe3,lsl#16 (16/9 high) → movk w9,#0x400a,lsl#16 (2.162 high)'),
++    # (a blanket horizontal-centering cut was reverted: it broke UI/world map; the battle-only width/rect fix is in hle_pillarbox.c)
+   ],
+ }
+ 
+@@ -69,7 +72,7 @@ CUTS = {
+ # 16:9 clamp. So four more observe the fitter's outputs (rect path A and B, the null-rect float clamp C) and the caller's consumption of the result at [x21+0xd0] (FIT_S)
+ OBS = {
+   'ace351a145c07a51f8e239666640a0d8': [
+-    (0x46f2b0, 27, 'f9400102', "pillarbox: the letterbox fitter main+0x45f7d0's one non-null-rect call (bl main+0x46f2b4): x0-x5 and the 16 bytes at [x5], the input rect"),
++    (0x46f2b0, 27, 'f9400102', "pillarbox: the ldr x2,[x8] right before the letterbox fitter main+0x45f7d0's one non-null-rect call (bl main+0x46f2b4): x0-x5, the input rect at [x5] and the second rect at [x6]; x2 is read from [x8] by the callback (it runs before the ldr), and the fitter's widths are read through a child chain (hle_pillarbox.c)"),
+     (0x45f988, 28, '1e230101', "pillarbox: the fitter's compare/select block, s0-s5 (the content pair converted and the clamped output pair with its offsets) and the integer pair w8/w11"),
+     (0x8ed18, 29, 'd503201f', "pillarbox: the wide-viewport branch after the cuts above, w23/w24/w25 (the target triple) and s0-s3 (the converted pair, the clamp constant, the product)"),
+     (0xdc5dc, 30, 'd29ae149', 'pillarbox: before the camera aspect store (str s0,[x20,#0xcd8] at +8): the camera x20, the aspect stored before, and the first-layer chain [x19+0x4d00]+0x30'),
+diff --git a/dm/host/dm.h b/dm/host/dm.h
+index 756094b..d5c9790 100644
+--- a/dm/host/dm.h
++++ b/dm/host/dm.h
+@@ -137,7 +137,7 @@ enum { OBS_UE_MALLOC = 21,                                       // Unreal's FMa
+        OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the SDK's address regions, gates the rewriter places by symbol in every sdk (patch_nso.py "Address regions", hle_svc.c)
+        OBS_STDALLOC_INIT = 25,                                         // StandardAllocator::Initialize's entry, the same way: its callback writes the size (hle_svc.c)
+        OBS_UE_REGION = 26,                                             // the store of Unreal's engine region size before nninitStartup reserves it: the register its upper bits name (dm/tools/ue_region.py, hle_svc.c)
+-       OBS_PILLARBOX_CALL = 27,                                        // FFT 1.5.1 ace351a1: main+0x46f2b0, the letterbox fitter's (main+0x45f7d0) one non-null-rect call, the arguments and the input rect at [x5] (hle_pillarbox.c)
++       OBS_PILLARBOX_CALL = 27,                                        // FFT 1.5.1 ace351a1: main+0x46f2b0, the ldr x2,[x8] right before the letterbox fitter's (main+0x45f7d0) one non-null-rect call: x0-x5, the input rect at [x5], the second rect at [x6]; x2 itself is read from [x8] (the callback runs before the ldr) (hle_pillarbox.c)
+        OBS_PILLARBOX_RECT = 28,                                        // FFT 1.5.1 ace351a1: main+0x45f988, the fitter's compare/select block, its s0-s5 (target and output rect floats) and w8/w11 (hle_pillarbox.c)
+        OBS_VIEWPORT_CLAMP = 29,                                        // FFT 1.5.1 ace351a1: main+0x8ed18, the wide-viewport branch after the profile's cuts, w23/w24/w25 and s0-s3 (hle_pillarbox.c)
+        OBS_CAMERA_ASPECT = 30,                                         // FFT 1.5.1 ace351a1: main+0xdc5dc, before the camera aspect store str s0,[x20,#0xcd8], and the first-layer pointer chain at [x19+0x4d00]+0x30 (hle_pillarbox.c)
+diff --git a/dm/host/hle_pillarbox.c b/dm/host/hle_pillarbox.c
+index ffdb520..9467442 100644
+--- a/dm/host/hle_pillarbox.c
++++ b/dm/host/hle_pillarbox.c
+@@ -14,8 +14,9 @@
+ // cuts, the camera aspect store, the bake's settings-pair load, the layer-composition rect push, the fitter's three output writes (rect path A and B, and the null-rect float
+ // clamp C), the caller's consumption of the 16 bytes at [x21+0xd0] right after the call, and - before any cut - the routing cbz census (FIT_ROUTE: flag, object, vtable, stack
+ // rect, input floats) at main+0x46f250, which names the object classes sharing the fitter and is what guards a consumer-side cut to the battle layer, since the same callsite
+-// also passes the small UI rects ((32,554,628..778) family) that must not become full-screen. Read-only: a callback changes no register, so the game runs as
+-// without them. Diagnostic for the fork's wide-aspect work; the size cap on the file keeps a long session bounded
++// also passes the small UI rects ((32,554,628..778) family) that must not become full-screen. Only the battle path writes guest memory (both rects and
++// the two width fields); every other callback is read-only and the game runs as without them. Diagnostic for the fork's wide-aspect work; the size cap
++// on the file keeps a long session bounded
+ #include "dm.h"
+ #include <errno.h>
+ #include <mach/mach.h>
+@@ -24,17 +25,15 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
++#define PB_LL(v) ((unsigned long long)(v))
++#define PB_S(r, k) (*(const uint32_t *)((const char *)(r) + 256 + 4 * (k)))
++
+ #define PB_CAP (60ull << 20)   // truncate the file back to empty once it is past this
+ static pthread_mutex_t pb_mu = PTHREAD_MUTEX_INITIALIZER;
+ static FILE *pb_f;
+ static unsigned long long pb_seq;
+ static int pb_tried;
+ 
+-// q0..q31 follow x0..x30 in dm_gate's register frame (dm/host/entry.S): s0..s31 are their lowest 32-bit words
+-#define PB_S(r, k) (*(const uint32_t *)((const char *)(r) + 256 + 4 * (k)))
+-
+-#define PB_LL(v) ((unsigned long long)(v))   // the x registers into %llx / %llu (uint64_t is unsigned long on these hosts)
+-
+ static float pb_f32(uint32_t w) { float v; memcpy(&v, &w, 4); return v; }   // the guest's f32 registers, reinterpreted
+ 
+ // Read guest memory (the guest's own addresses are this process's, but they may point anywhere): 0 and the bytes, or -1 when unmapped
+@@ -43,6 +42,35 @@ static int pb_mem(const void *addr, size_t n, void *out) {
+     return !addr || vm_read_overwrite(mach_task_self(), (vm_address_t)(uintptr_t)addr, (vm_size_t)n, (vm_address_t)(uintptr_t)out, &got) != KERN_SUCCESS || got != n;
+ }
+ 
++// The fitter (main+0x45f7d0) reads each object's width through a child chain: main+0x3f954 does
++// ldr x8,[x0,#0x28]; ldrh w0,[x8,#0x48], and its input is main+0x41220's [[x0+0x28]+0x10] (x2), or that
++// after main+0x431c0's array lookup (x1). Follow the chain to the width field; 0 when a link is missing.
++// main+0x45f828 zeroes w1 before the 0x431c0 call, so the array-index argument is 0; array_w1 exposes
++// the next slot only for diagnostics (it is not the field the game reads).
++static uint64_t pb_width_field(uint64_t obj, int via_array, int array_w1, uint32_t *type_out) {
++    uint64_t p1 = 0, arr = 0, a = 0, p2 = 0, b = 0, p3 = 0;
++    uint8_t idx = 0;
++    uint32_t count = 0, capacity = 0;
++    if (!obj) return 0;
++    if (pb_mem((const void *)(uintptr_t)(obj + 0x28), sizeof p1, &p1) || !p1) return 0;
++    if (via_array) {
++        if (pb_mem((const void *)(uintptr_t)(p1 + 0x2c), sizeof idx, &idx) || idx == 0xff) return 0;
++        // 0x431d0..0x431e4: count-1 must be <= 1 and [p1+0x10] <= w1, or the helper returns null.
++        if (pb_mem((const void *)(uintptr_t)(p1 + 8), sizeof count, &count) ||
++            pb_mem((const void *)(uintptr_t)(p1 + 0x10), sizeof capacity, &capacity)) return 0;
++        if ((uint32_t)(count - 1) > 1 || capacity > (uint32_t)array_w1) return 0;
++        if (pb_mem((const void *)(uintptr_t)(p1 + 0x20), sizeof arr, &arr) || !arr) return 0;
++        if (pb_mem((const void *)(uintptr_t)(arr + (uint64_t)idx * 8 + (uint64_t)array_w1 * 8), sizeof a, &a) || !a) return 0;
++        if (pb_mem((const void *)(uintptr_t)(a + 0x28), sizeof p2, &p2) || !p2) return 0;
++    } else {
++        p2 = p1;
++    }
++    if (pb_mem((const void *)(uintptr_t)(p2 + 0x10), sizeof b, &b) || !b) return 0;
++    if (pb_mem((const void *)(uintptr_t)(b + 0x28), sizeof p3, &p3) || !p3) return 0;
++    if (type_out) { uint32_t t = 0; if (pb_mem((const void *)(uintptr_t)(p3 + 0x40), sizeof t, &t) == 0) *type_out = t; }
++    return p3 + 0x48;
++}
++
+ static void pb_line(const char *tag, const char *fmt, ...) {
+     pthread_mutex_lock(&pb_mu);
+     if (!pb_f) {
+@@ -70,11 +98,50 @@ static void pb_call(uint64_t *r, int param) {
+     // Edge-to-edge fix: battle rects (width >= 1500) get widened to the full picture width before the fitter runs, so the fitter's 16:9 clamp (which would otherwise center them into
+     // ~171 px bars) has nothing to clamp. UI rects (< 1500) are left untouched. The fitter's threshold is also raised to the picture ratio (see patches.py) so a 1920-wide input is not
+     // clamped. vm_write goes through the kernel (same path as hle_cheats), the guest's pages are writable from here.
+-    if (r[5] && rect[2] > rect[0] && (rect[2] - rect[0]) >= 1500) {
++    // The >=1500 threshold targets battle/full-scene rects (known 1632-wide confiner) and avoids misclassifying UI (small boxes/overlays), which caused darkness when their texture dims were overwritten.
++    uint32_t orig_w = (rect[2] > rect[0]) ? (rect[2] - rect[0]) : 0;
++    int is_battle = (r[5] && orig_w >= 1500);
++    kern_return_t kr_rect = KERN_SUCCESS;
++    if (is_battle) {
++        // x2 is loaded by the ldr at this gate's own site, so the callback (before it) sees the old
++        // value; read the real object from the slot the caller computed in x8.
++        uint64_t x2_obj = 0;
++        if (r[8]) pb_mem((const void *)(uintptr_t)r[8], sizeof x2_obj, &x2_obj);
++        // Follow the fitter's width-read chain to the u16 both objects use, and set it to the frame
++        // width. FIT_B's centering offset is max(0, (w2-w1)/2) = (1920-1632)/2 = 144; equalising the
++        // two widths to 1920 makes it zero, which is required before rect B can be widened.
++        uint32_t type1 = 0, type2 = 0, type_alt = 0;
++        uint16_t before1 = 0, before2 = 0, before_alt = 0;
++        // Path A's array helper is called with w1=0 (main+0x45f828); w1=1 is logged only as a control.
++        uint64_t wf1 = pb_width_field(r[1], 1, 0, &type1);
++        uint64_t wf1_alt = pb_width_field(r[1], 1, 1, &type_alt);
++        uint64_t wf2 = pb_width_field(x2_obj, 0, 0, &type2);
++        if (wf1) pb_mem((const void *)(uintptr_t)wf1, sizeof before1, &before1);
++        if (wf1_alt) pb_mem((const void *)(uintptr_t)wf1_alt, sizeof before_alt, &before_alt);
++        if (wf2) pb_mem((const void *)(uintptr_t)wf2, sizeof before2, &before2);
++        uint16_t w = 1920;
++        kern_return_t kw1 = wf1 ? vm_write(mach_task_self(), (vm_address_t)(uintptr_t)wf1, (vm_offset_t)(uintptr_t)&w, (mach_msg_type_number_t)sizeof w) : (kern_return_t)-1;
++        kern_return_t kw2 = wf2 ? vm_write(mach_task_self(), (vm_address_t)(uintptr_t)wf2, (vm_offset_t)(uintptr_t)&w, (mach_msg_type_number_t)sizeof w) : (kern_return_t)-1;
++        // Widen rect A ([x5]) unconditionally: its own offset is already zero on the battle path.
+         uint32_t wrect[4] = {0, rect[1], 1920, rect[3]};
+-        vm_write(mach_task_self(), (vm_address_t)(uintptr_t)r[5], (vm_offset_t)(uintptr_t)wrect, (mach_msg_type_number_t)sizeof wrect);
++        kr_rect = vm_write(mach_task_self(), (vm_address_t)(uintptr_t)r[5], (vm_offset_t)(uintptr_t)wrect, (mach_msg_type_number_t)sizeof wrect);
+         rect[0] = wrect[0]; rect[2] = wrect[2];
++        // Widen rect B ([x6] = [x21+0xf0]) only when both widths were set: without equal widths the
++        // fitter still adds 144, which would push its right edge to 2064 (outside the 1920 frame).
++        uint32_t rect2[4] = {0, 0, 0, 0};
++        kern_return_t kr_rect2 = (kern_return_t)-1;
++        if (kw1 == KERN_SUCCESS && kw2 == KERN_SUCCESS && r[6] && pb_mem((const void *)(uintptr_t)r[6], sizeof rect2, rect2) == 0) {
++            uint32_t wrect2[4] = {0, rect2[1], 1920, rect2[3]};
++            kr_rect2 = vm_write(mach_task_self(), (vm_address_t)(uintptr_t)r[6], (vm_offset_t)(uintptr_t)wrect2, (mach_msg_type_number_t)sizeof wrect2);
++        }
++        pb_line("DEBUG", "is_battle=%d orig_w=%u rect_w=%u kr_rect=%d kr_rect2=%d rect2=%u,%u,%u,%u x2=%llx wf1=%llx wf1a=%llx wf2=%llx type1=%u type_alt=%u type2=%u before1=%u before_alt=%u before2=%u kw1=%d kw2=%d",
++                is_battle, orig_w, rect[2] - rect[0], (int)kr_rect, (int)kr_rect2,
++                rect2[0], rect2[1], rect2[2], rect2[3], PB_LL(x2_obj), PB_LL(wf1), PB_LL(wf1_alt), PB_LL(wf2),
++                type1, type_alt, type2, before1, before_alt, before2, (int)kw1, (int)kw2);
++    } else {
++        pb_line("DEBUG", "is_battle=%d orig_w=%u rect_w=%u kr_rect=%d", is_battle, orig_w, rect[2] - rect[0], (int)kr_rect);
+     }
++
+     pb_line("PB_CALL", "%llx\t%llx\t%llx\t%llx\t%llx\t%llx\t%u\t%u\t%u\t%u",
+             PB_LL(r[0]), PB_LL(r[1]), PB_LL(r[2]), PB_LL(r[3]), PB_LL(r[4]), PB_LL(r[5]),
+             rect[0], rect[1], rect[2], rect[3]);

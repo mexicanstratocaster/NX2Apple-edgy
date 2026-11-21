@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tanori-rider <rtanori1@asu.edu>
+Date: Fri, 20 Nov 2026 19:03:09 -0700
+Subject: [PATCH] nvn: pillarbox notices census every distinct RT bind and
+ scissor/viewport shape - revG's last-value dedup burned its budget on the
+ alternating bloom pair and no true window shape was named; revH logs every
+ distinct shape up to three times each, so a 1578.67/bars match or the
+ 1612-wide lead stand out
+
+Upstream-Status: fork-only
+Reason: pillarbox hunt revH - diagnostics-only: census every distinct render-target bind shape and every distinct scissor/viewport shape seen by the HLE host, so the battle letterbox (1578.67 px confined width on a 888-tall frame, revD) can be attributed to the exact source shape
+Issue: mexicanstratocaster/NX2Apple-edgy#1
+
+---
+ dm/gfx/nvn/hle_nvn.c | 68 +++++++++++++++++++++++++++++---------------
+ 1 file changed, 45 insertions(+), 23 deletions(-)
+
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index 4f4ea57..1835163 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -1463,41 +1463,63 @@ static const tex_t *tex_snap(void *rec_, size_t off, int k, const NVNtexture *t,
+     }
+     return s;
+ }
+-// The pillarbox hunt (revF): the picture reaches the screen confined to a centered 16:9 (1578.67x888 content in the 1920x888 swap chain) while the game's own wide-viewport RT builder
+-// (main+0x8ecac) provably never runs (VP_CLAMP 0 in three device sessions) and the letterbox fitter is UI-only. These host notices catch the remaining suspects from outside: every
+-// distinct render-target bind that is not the full display pair (a 1578x888 scene target would name the confinement directly), and every viewport / scissor that is a full-height
+-// centered side-cut (170-172 wide bars or a 1578-1580 width at x 169-171). Bounded: one line per new shape until the budget runs out
++// The pillarbox hunt (revF/revG): the picture reaches the screen confined to a centered 16:9 (1578.67x888 content in the 1920x888 swap chain) while the game's own wide-viewport RT builder
++// (main+0x8ecac) provably never runs (VP_CLAMP 0 in three device sessions) and the letterbox fitter is UI-only. revG's census: no 1578x888 target exists, but 1280x720 textures are
++// created 230 times (1280 * 888/720 = 1578.67 exactly: a 720p picture layer scaled by height into the 888-tall frame). These host notices now census EVERY distinct (w,h) of RT bind
++// once, with a rolling seen-set, so alternation (the 480x222/960x444 bloom pair, which burned revG's 220-line budget on repeats) cannot lose new shapes; the skip-set touches only
++// shapes already logged at least PB_RT_TIMES times
++#define PB_RT_SHAPES 256
++#define PB_RT_TIMES  3
++static unsigned pb_rt_seen[PB_RT_SHAPES];   // (w,h,dw,dh) -> times logged
++static unsigned pb_rt_hash(int w, int h, int dw, int dh) {
++    unsigned x = (unsigned)w * 2654435761u ^ (unsigned)h * 40503u ^ (unsigned)dw * 2246822519u ^ (unsigned)dh * 3266489917u;
++    return (x ^ x >> 13) & (PB_RT_SHAPES - 1);
++}
+ static void pb_rt_note(int n, const NVNtexture *const *ct, const NVNtexture *dt) {
+     if (!nvn_log_on()) return;
+-    static _Atomic int budget = 220;
+-    if (atomic_fetch_sub(&budget, 1) <= 0) return;
+     const tex_t *f = ct && n > 0 && ct[0] ? CTX(ct[0]) : NULL, *d = dt ? CTX(dt) : NULL;
+     int w = f ? f->d.width : 0, h = f ? f->d.height : 0, dw = d ? d->d.width : 0, dh = d ? d->d.height : 0;
+-    if ((!f || (w == 1920 && h == 888)) && (!d || (dw == 1920 && dh == 888))) { atomic_fetch_add(&budget, 1); return; }
+-    static int lw = -1, lh = -1, ldw = -1, ldh = -1;
+-    if (w == lw && h == lh && dw == ldw && dh == ldh) { atomic_fetch_add(&budget, 1); return; }
+-    lw = w; lh = h; ldw = dw; ldh = dh;
+-    LOG("[nvn] pillarbox RT bind: color %dx%d fmt %#x, depth %dx%d fmt %#x", w, h, f ? f->d.format : 0, dw, dh, d ? d->d.format : 0);
++    if ((!f || (w == 1920 && h == 888)) && (!d || (dw == 1920 && dh == 888))) return;
++    unsigned k = pb_rt_hash(w, h, dw, dh), times = pb_rt_seen[k] & 0x3fffffff;
++    if (times >= PB_RT_TIMES) return;
++    pb_rt_seen[k] = (pb_rt_seen[k] & 0xc0000000) | (times + 1);   // hash-line collision only wastes slots, never name a wrong shape
++    static _Atomic int budget = 2000;
++    if (atomic_fetch_sub(&budget, 1) <= 0) return;
++    LOG("[nvn] pillarbox RT bind(%u): color %dx%d fmt %#x, depth %dx%d fmt %#x", times + 1, w, h, f ? f->d.format : 0, dw, dh, d ? d->d.format : 0);
+ }
+ 
+ static void pb_vp_note(float x, float y, float w, float h) {
+     if (!nvn_log_on()) return;
+-    if (!(w >= 800.0f && 860.0f <= h && h <= 920.0f && (x > 4.0f || w < 1900.0f))) return;
+-    static _Atomic int n_; if (atomic_fetch_add(&n_, 1) > 48) return;
+-    static float lx = -1, ly = -1, lw = -1, lh = -1;
+-    if (x == lx && y == ly && w == lw && h == lh) return;
+-    lx = x; ly = y; lw = w; lh = h;
+-    LOG("[nvn] pillarbox viewport: x %.1f y %.1f w %.1f h %.1f", x, y, w, h);
++    if (!(w > 0.0f)) return;
++    // Same census shape as the scissor: distinct (x,y,w,h) up to PB_SC_TIMES logs; the m floats get rounded to quarters first so 1578.67 vs 1578.5 do not need separate slots
++    int xi = (int)lrintf(x * 4.0f), yi = (int)lrintf(y * 4.0f), wi = (int)lrintf(w * 4.0f), hi = (int)lrintf(h * 4.0f);
++    unsigned k = pb_sc_hash(xi, yi, wi, hi), times = pb_sc_seen[k] & 0x3fffffff;
++    if (times >= PB_SC_TIMES) return;
++    pb_sc_seen[k] = (pb_sc_seen[k] & 0xc0000000) | (times + 1);
++    static _Atomic int budget = 800;
++    if (atomic_fetch_sub(&budget, 1) <= 0) return;
++    LOG("[nvn] pillarbox viewport(%u): x %.2f y %.2f w %.2f h %.2f", times + 1, x, y, w, h);
+ }
+ 
++// Viewport / scissor notices: revG's full-height-only filter caught exactly one scissor (2,0,1612,888) — 1612/888 = 1.815, neither 16:9 (1.778) nor the display pair (2.162) — which makes
++// any window-shaped host call the lead suspect even though 1612 != 1578.67. revH censuses every distinct (x,y,w,h) once instead of filtering by guesses: any wide-but-not-full window
++// shape will show up, whether it matches the bars (1578.67 / 170.67) or introduces a new lead like 1612
++#define PB_SC_SHAPES 256
++#define PB_SC_TIMES  3
++static unsigned pb_sc_seen[PB_SC_SHAPES];   // (x,w,h) -> times logged (y folded in only when x,w,h are equal)
++static unsigned pb_sc_hash(int x, int y, int w, int h) {
++    unsigned z = (unsigned)(x + 1) * 2654435761u ^ (unsigned)(y + 1) * 40503u ^ (unsigned)(w + 2) * 2246822519u ^ (unsigned)(h + 2) * 3266489917u;
++    return (z ^ z >> 13) & (PB_SC_SHAPES - 1);
++}
+ static void pb_sc_note(int x, int y, int w, int h) {
+     if (!nvn_log_on()) return;
+-    if (!(w >= 800 && h >= 860 && h <= 920 && (x > 4 || w < 1900))) return;
+-    static _Atomic int n_; if (atomic_fetch_add(&n_, 1) > 48) return;
+-    static int lx = -1, ly = -1, lw = -1, lh = -1;
+-    if (x == lx && y == ly && w == lw && h == lh) return;
+-    lx = x; ly = y; lw = w; lh = h;
+-    LOG("[nvn] pillarbox scissor: x %d y %d w %d h %d", x, y, w, h);
++    if (w <= 0) return;
++    unsigned k = pb_sc_hash(x, y, w, h), times = pb_sc_seen[k] & 0x3fffffff;
++    if (times >= PB_SC_TIMES) return;
++    pb_sc_seen[k] = (pb_sc_seen[k] & 0xc0000000) | (times + 1);
++    static _Atomic int budget = 1200;
++    if (atomic_fetch_sub(&budget, 1) <= 0) return;
++    LOG("[nvn] pillarbox scissor(%u): x %d y %d w %d h %d", times + 1, x, y, w, h);
+ }
+ 
+ NVN(nvnCommandBufferSetRenderTargets, void, NVNcommandBuffer *c, int n, const NVNtexture *const *ct, const NVNtextureView *const *cv,

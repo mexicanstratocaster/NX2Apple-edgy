@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tanori-rider <rtanori1@asu.edu>
+Date: Fri, 20 Nov 2026 19:18:56 -0700
+Subject: [PATCH] nvn: hoist the pillarbox scissor/viewport census declarers
+ above both users
+
+The revI build's six C99 errors: pb_vp_note (the viewport census, which shares
+the scissor's seen-set and hash) referenced PB_SC_TIMES/pb_sc_seen/pb_sc_hash
+defined only eleven lines later, after pb_vp_note. C99 file-scope statics have
+no forward use. The declarers move above the viewport notice; the whole block
+(revG scissor commentary included) rides with them. Change is motion-only: no
+behavior difference. Host C must be order-linted (and clang-syntax-checked
+when a matching include set exists) before export - check only proves the
+queue applies, never that C compiles.
+
+Upstream-Status: fork-only
+Reason: revI build fix (motion-only): the viewport census shares the scissor census declarers but C99 file-scope statics have no forward use, so the six undeclared-identifier/implicit-declaration errors of the first revI build must be removed by hoisting the scissor declarers above both users. Diagnostics-only content, no behavior change
+Issue: mexicanstratocaster/NX2Apple-edgy#1: LNPANDY/NX2Apple#<n>
+
+---
+ dm/gfx/nvn/hle_nvn.c | 22 ++++++++++++----------
+ 1 file changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index 1835163..b40bf49 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -1488,6 +1488,18 @@ static void pb_rt_note(int n, const NVNtexture *const *ct, const NVNtexture *dt)
+     LOG("[nvn] pillarbox RT bind(%u): color %dx%d fmt %#x, depth %dx%d fmt %#x", times + 1, w, h, f ? f->d.format : 0, dw, dh, d ? d->d.format : 0);
+ }
+ 
++// Viewport / scissor notices: revG's full-height-only filter caught exactly one scissor (2,0,1612,888) — 1612/888 = 1.815, neither 16:9 (1.778) nor the display pair (2.162) — which makes
++// any window-shaped host call the lead suspect even though 1612 != 1578.67. revH censuses every distinct (x,y,w,h) once instead of filtering by guesses: any wide-but-not-full window
++// shape will show up, whether it matches the bars (1578.67 / 170.67) or introduces a new lead like 1612.
++// These declarers stand BEFORE both users (the viewport notice below and the scissor notice after): C99 has no forward use of file-scope statics (the revI build's six errors)
++#define PB_SC_SHAPES 256
++#define PB_SC_TIMES  3
++static unsigned pb_sc_seen[PB_SC_SHAPES];   // (x,w,h) -> times logged (y folded in only when x,w,h are equal)
++static unsigned pb_sc_hash(int x, int y, int w, int h) {
++    unsigned z = (unsigned)(x + 1) * 2654435761u ^ (unsigned)(y + 1) * 40503u ^ (unsigned)(w + 2) * 2246822519u ^ (unsigned)(h + 2) * 3266489917u;
++    return (z ^ z >> 13) & (PB_SC_SHAPES - 1);
++}
++
+ static void pb_vp_note(float x, float y, float w, float h) {
+     if (!nvn_log_on()) return;
+     if (!(w > 0.0f)) return;
+@@ -1501,16 +1513,6 @@ static void pb_vp_note(float x, float y, float w, float h) {
+     LOG("[nvn] pillarbox viewport(%u): x %.2f y %.2f w %.2f h %.2f", times + 1, x, y, w, h);
+ }
+ 
+-// Viewport / scissor notices: revG's full-height-only filter caught exactly one scissor (2,0,1612,888) — 1612/888 = 1.815, neither 16:9 (1.778) nor the display pair (2.162) — which makes
+-// any window-shaped host call the lead suspect even though 1612 != 1578.67. revH censuses every distinct (x,y,w,h) once instead of filtering by guesses: any wide-but-not-full window
+-// shape will show up, whether it matches the bars (1578.67 / 170.67) or introduces a new lead like 1612
+-#define PB_SC_SHAPES 256
+-#define PB_SC_TIMES  3
+-static unsigned pb_sc_seen[PB_SC_SHAPES];   // (x,w,h) -> times logged (y folded in only when x,w,h are equal)
+-static unsigned pb_sc_hash(int x, int y, int w, int h) {
+-    unsigned z = (unsigned)(x + 1) * 2654435761u ^ (unsigned)(y + 1) * 40503u ^ (unsigned)(w + 2) * 2246822519u ^ (unsigned)(h + 2) * 3266489917u;
+-    return (z ^ z >> 13) & (PB_SC_SHAPES - 1);
+-}
+ static void pb_sc_note(int x, int y, int w, int h) {
+     if (!nvn_log_on()) return;
+     if (w <= 0) return;

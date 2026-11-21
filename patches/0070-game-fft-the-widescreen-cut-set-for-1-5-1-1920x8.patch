@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mexicanstratocaster <mexicanstratocaster@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 07:04:01 +0000
+Subject: [PATCH] game/fft: the widescreen cut set for 1.5.1 (1920x888, both
+ pools, the wide-viewport clamp)
+
+Upstream-Status: fork-only
+Reason: this fork's purpose is native aspect and resolution; the cuts are the consumer-verified widescreen route for FINAL FANTASY TACTICS 1.5.1 (render pair 1920x888, the vn graphics and swapchain pool gates, the wide-viewport clamp), all asserted against the real 1.5.1 NSO. Upstream's profile stays 16:9 and brought up on 1.4.0 (see 0069)
+Issue: seedds/nxnative#3046 (the 1.5.1 registration the cuts extend), seedds/nxnative#3033 (the rendered-pair precedent, handheld 1080p / iPhone Duo native aspect)
+
+---
+ dm/games/010038B015560000/README.md  | 20 +++++++++-------
+ dm/games/010038B015560000/game.tsv   |  2 +-
+ dm/games/010038B015560000/patches.py | 35 ++++++++++++++++++++++++++++
+ 3 files changed, 47 insertions(+), 10 deletions(-)
+
+diff --git a/dm/games/010038B015560000/README.md b/dm/games/010038B015560000/README.md
+index 22e212a1..dd403309 100644
+--- a/dm/games/010038B015560000/README.md
++++ b/dm/games/010038B015560000/README.md
+@@ -52,18 +52,20 @@ General host changes first needed here; each applies to every game:
+ - **A job wake lost between two workers on one auto-clear event** (thread dump `wait #`): [One auto-clear event shared by a pool's workers](../../../docs/reference/threads.md#one-auto-clear-event-shared-by-a-pools-workers).
+ - **Priority handoff when starting a same-core child**, found during the audit but not the cause of this game's hang: [Starting a higher-priority thread on the caller's core](../../../docs/reference/threads.md#starting-a-higher-priority-thread-on-the-callers-core).
+ 
+-## Widescreen and native resolution on a phone (bring-up plan, current)
++## Widescreen and native resolution on a phone (route proven, current)
+ 
+-The panel in question is 2868x1320 (19.5:9 = 2.17:1, wider than 16:9). The host now supports wide picture shapes under `DM_SCREEN_ASPECT` (1.3 to 2.4): a wide shape takes output 1920x880 at 2.17 (height a multiple of 8; the 48 grid left the picture 2.2 % off the screen and the present cropped), keeps the 16:9 vertical angle in view (`k` floored at 1) and presents the picture to the whole canvas. But `screen_aspect` is off in this profile and the host only follows the shape where the build has screen-shape stubs (`DM_GAME_SCREEN_ASPECT` - today only Breath of the Wild 1.9.0 and Animal Crossing 3.0.3). FFT needs its own stubs, keyed to `ace351a1…`.
++The panel in question is 2868x1320 (19.5:9 ≈ 2.17:1, wider than 16:9). The route is the game's own render pair, not host reshaping, and not a forced size past its load (the earlier Build B reading is superseded: its crash was the 16 MiB swapchain-pool ceiling below, not the patching itself):
+ 
+-What is known about 1.5.1's `main` (`ace351a145c07a51f8e239666640a0d8`):
++1. **The render pair.** 1280x720 is written by two places that must agree: `main+0x17910` (the display settings the renderer is handed; its +0x18 and +0x30 hold the 64-bit pair, width low and height high) and `main+0x68c` (the vtable override at `.data 0x808268` slot +0x20 of the same fields). From the struct the crop (`main+0x3bd2c`), the swap-chain textures (`main+0x4fed0` -> `+0x51220` -> `+0x3b770` -> `nvnWindowBuilderSetTextures`) and the viewport are all built, and the binary holds no 16:9 value (no f32 1.7777778, no f64 16/9, no u16/u32 1280,720 pair anywhere in text, rodata or data), so the projection computes from the size at run time. On iOS the host presents the swap chain at its own aspect, so the pair chooses both resolution and shape.
++2. **Two pool gates** - every size past them died at `nvnMemoryPoolMap(NULL)` before these were found, and they are why the earlier forced-size builds crashed: `main+0xee9c`, the game's nn graphics pool reservation, 1280 -> 1792 MiB (the game drains the shared GPU pool during boot; the host builds the named pool in lazy chunks, so nothing commits up front), and `main+0xf1c4`, the game's own swapchain pool, 16 -> 32 MiB: its segment allocator (`main+0xad90`) cannot serve a 3-texture swapchain past 16 MiB, and the failed allocation is the null-pool crash. This was the missing piece in every earlier height-above-720 crash, 1920x882 included.
++3. **The wide-viewport cut.** The render-target/viewport builder (1.5.1: `main+0x8ecac`, size 0x238, cut at +0x6c/+0x78; 1.4.0: the same function at `main+0x7572c`) clamps any target wider than 16:9 to a 16:9 window of full height, centered (a pillarbox), and the clamped width becomes the projection aspect (`camera+0xcd8` from w25/w23). Two nops drop the clamp, keeping the full width, so the render target, aspect and UI offsets follow the picture; targets at or below 16:9 take the original path.
+ 
+-- **A forced native render pair is a dead end.** A build that wrote 1920x1080 render sizes past the game's own load (Build B) crashed at `h_nvnMemoryPoolMap` (`x0 = 0`, pool 1792 MB); `DM_ALIAS_SIZE=0xC8000000` grew the alias to 6.9 GB and the crash was byte-identical. Civilization VII's bring-up ([seedds/nxnative issue #3033](https://github.com/seedds/nxnative/issues/3033)) saw the same: forced sizes downstream of the size load revert or null-look-up; the working cut redirected the handheld size **load** to the docked literal instead. FFT renders 720p handheld even with `DM_OPMODE=1`, so the render-pair load site is the gate.
+-- 1.5.1 `main` holds 1920x1080 literals at file offsets `0x38E38` and `0x3181F8` (the docked pair a redirect can reuse).
+-- The probe route is the one [Civilization VII's bring-up](https://github.com/seedds/nxnative/issues/3033) took: find the function that copies the handheld render sizes (a 1280x720 literal, its reader writes a display-profile struct), cut its load to the `0x38E38`/`0x3181F8` literals, then check the log's swapchain size and `WindowCrop` before any other stub.
+-- After 1080p boots: widen the picture with `screen_aspect on` and the projection stubs (the engine's perspective projection takes the view ratio; hunt the frame's four projection inputs as [Ocarina of Time's widescreen](https://github.com/seedds/nxnative/pull/3037) did), then the HUD layout anchors, then touch scale. Movies stay 16:9.
++On 1.4.0 (`3cfd4578...`) this route ran on device at 1568x720 (2.178:1) with projection, FOV, HUD and touch following the picture. On 1.5.1 (`ace351a1...`) the 16:9 variant - the same four size sites at 1920x1080 (the binary also holds that literal at `0x38E38`/`0x3181F8`, the docked pair, though this route needs no redirect: the size writers are patched in place), both pools and the wake cut - sat at 59.9 fps across a whole session at crisp 1080p. All ten cuts are registered for `ace351a1...` in [patches.py](patches.py), the pair as **1920x888** (the 8-multiple height the 19.5:9 panel's shape takes at 1920 wide; the 16:9 1080p fallback swaps the two height encodings to `movk x8,#0x438,lsl#32`). `screen_aspect` stays off in this profile: the game's own projection computes from the pair and the host presents the wide swap chain directly - the switch only applies where a build has screen-shape stubs.
++
++Open follow-ups, in order: the movies (the game letterboxes its own 16:9 movies; check they center on the wide picture), the touch layout at the taller picture (it followed the pair at 720 height on 1.4.0), and the messy textures in cutscenes and battle (see Open below).
+ 
+ ## Open
+ 
+-- No source gives an iPhone measurement (frame rate, footprint); development.md says only "playable on an iPhone".
+-- No screen-shape (widescreen) stubs yet; the plan above starts from the render-pair load site on a 1.5.1 dump.
++- **Messy textures in cutscenes and battle** (newspaper-print noise over the picture on an iPhone 18 Pro Max, 1080p 16:9 build). The prime leads, in order: upstream [issue #2275](https://github.com/seedds/nxnative/issues/2275)'s `sampler ID 768 not registered` (one line per session in this game's device logs too, once read as benign - it drives every third frame of the CRI Mana movies and in-engine sprites to horizontal streaks, and a host fix for reading such samplers, SeparateSamplerId raw IDs from uniform-buffer words, landed 2026-11-12 and is in this engine); the 19 unbounded shader keys of `c1_full` from the update's shader build (bindings whose slot was not decoded); the 30 texture/cover pixel pairs of the DmIOS shader audit. All three sit in the project's handoff evidence; a device log of a messy-textures session with `DM_NVN_TEXINFO=1280x720` is the next probe.
++- `shader_versions` stays `v393216` as registered; if a build from a 1.5.1-only supplies differs in the technique files, add `v524288` there and rebuild the shader chain.
++- No iPhone fps/footprint source beyond development.md's "playable on an iPhone"; the device sessions above are the numbers.
+diff --git a/dm/games/010038B015560000/game.tsv b/dm/games/010038B015560000/game.tsv
+index d2fbf8bf..29e9600e 100644
+--- a/dm/games/010038B015560000/game.tsv
++++ b/dm/games/010038B015560000/game.tsv
+@@ -16,7 +16,7 @@ pad_layout	full
+ 
+ # ---- Versions ----
+ build	v393216	1.4.0	main=3cfd457814dd647f4cd0f0ae9f9454d2	sdk=d83a56a5558798414c78ec722867a7da
+-# 1.5.1's sdk row assumes the SDK module is byte-identical to 1.4.0's (the game's updates have kept it); confirm against the update dump's sdk build ID
++# 1.5.1's sdk build ID is read from the update dump's own NSO (2026-11-20, dm/tools/nso.py) and matches 1.4.0's, so the two share the SDK row and its patches
+ build	v524288	1.5.1	main=ace351a145c07a51f8e239666640a0d8	sdk=d83a56a5558798414c78ec722867a7da
+ package	v393216
+ shader_versions	v393216
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index 535295a9..8d51f3da 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -14,9 +14,36 @@ CUTS = {
+   ],
+   # 1.5.1 (v524288) main ace351a145c07a51f8e239666640a0d8 keeps the same job-pool code and site as 1.4.0 (upstream seedds/nxnative issue #3046: a profile derived from the
+   # update dropped the cut - blank window, audio runs, never draws; with the cut, Mac 60 fps p50 16.70, iPad mini 60 fps, no red lines)
++  #
++  # The widescreen cuts (consumer-verified: see the README's widescreen section): the console-mode render size 1280x720 is written by two places that must agree,
++  # main+0x17910 (the display settings the renderer is handed: its +0x18 and +0x30 hold the 64-bit pair width low / height high, main+0x1793c calls [this+0x128]'s
++  # vtable+0x20 on the struct and that slot is main+0x68c, the second place, which writes the fields again) - from the struct the crop (main+0x3bd2c), the swap-chain
++  # textures (main+0x4fed0 -> +0x51220 -> +0x3b770 -> nvnWindowBuilderSetTextures) and the viewport are all built, and the binary holds no 16:9 value (no f32
++  # 1.7777778, no f64 16/9, no u16/u32 1280,720 pair in text, rodata or data), so the projection is computed from the size at run time: patching the pair widens and
++  # raises what the game draws in one step. Two gates: (1) main+0xee9c, the game's nn graphics pool reservation (1280 MiB - the game drains the shared GPU pool during
++  # boot; nvnWindowBuilderSetTextures fails with ~13-14 MiB left, the swapchain segment backend vtable+0x40 returns 0 with nnResult 0x96030003, 0x48f0 finds no pool,
++  # nvnMemoryPoolMap(NULL) at main+0x3b8a4); the host builds the named pool in lazy chunks, so the raised reservation commits nothing up front. (2) main+0xf1c4, the
++  # game's own 16 MiB swapchain pool: its segment allocator (main+0xad90) rounds the 3-texture swapchain past 16 MiB above 720p and the allocation fails into the
++  # null-pool crash above, a hard 16 MiB ceiling - with the pool at 32 MiB the game's own 1920x1080 pair sat at 59.9 fps on 1.5.1 across a whole session, and without
++  # it every size past the 16 MiB swapchain (1920x882 included) crashed at boot.
++  # A wide picture also needs the wide-viewport cut: the render-target/viewport builder (1.5.1's main+0x8ecac, size 0x238, cut at +0x6c/+0x78; 1.4.0's is the same
++  # function at main+0x7572c) clamps any target wider than 16:9 to a 16:9 window of full height, centered (a pillarbox), and the clamped width becomes the projection
++  # aspect (camera+0xcd8 from w25/w23). Dropping the two instructions of the wider-than-16:9 branch keeps s0 at the full width (from ucvtf w24), puts the x offset at 0,
++  # and the render target, aspect and UI offsets follow; targets at or below 16:9 take the original height-clamped path. 1.5.1's bytes at both cut sites are identical
++  # to 1.4.0's, where this ran on device at 1568x720 (2.178:1) with projection, FOV, HUD and touch following the picture.
++  # The pair here is 1920x888 (2.162:1): 1920 wide at the 8-multiple height the 2868x1320 panel's shape takes (1920 / 2.1727 rounded to 8). The device-verified 16:9
++  # 1080p fallback swaps both height encodings to movk x8,#0x438,lsl#32 (0887c0f2).
+   'ace351a145c07a51f8e239666640a0d8': [
+     (0x12554, '000040f9', '000400f9', 'job pool wake: ldr x0,[x0] → str x0,[x0,#8] (pending = nonzero: the woken worker signals once more)'),
+     (0x12558, '720d1914', 'fdffff17', 'job pool wake: b SignalEvent → b 0x1254c (ldr x0,[x0]; b SignalEvent)'),
++    (0x17910, '08a080d2', '08f080d2', 'render size, the display settings the renderer is handed: mov x8,#0x500 (width 1280) → mov x8,#0x780 (width 1920)'),
++    (0x17914, '085ac0f2', '086fc0f2', 'render size, the display settings the renderer is handed: movk x8,#0x2d0,lsl#32 (height 720) → movk x8,#0x378,lsl#32 (height 888, the screen-wide pair; the 16:9 1080p fallback is movk x8,#0x438,lsl#32)'),
++    (0x68c, '08a080d2', '08f080d2', 'render size, the vtable override of the same two fields: mov x8,#0x500 (width 1280) → mov x8,#0x780 (width 1920)'),
++    (0x690, '085ac0f2', '086fc0f2', 'render size, the vtable override of the same two fields: movk x8,#0x2d0,lsl#32 (height 720) → movk x8,#0x378,lsl#32 (height 888)'),
++    (0xee9c, '0200aa52', '0200ae52', 'nn graphics pool reservation: mov w2,#0x50000000 (1280 MiB) → mov w2,#0x70000000 (1792 MiB) (the host builds the pool in lazy chunks, so nothing is committed up front)'),
++    (0xf1c4, '0220a052', '0240a052', 'swapchain pool: mov w2,#0x1000000 (16 MiB) → mov w2,#0x2000000 (32 MiB): the segment allocator cannot serve a swapchain past 16 MiB and the allocation fails into the nvnMemoryPoolMap(NULL) crash - 1920x888 needs about 20.5 MiB, 1080p 23.7'),
++    (0x8ed18, '2001271e', '1f2003d5', 'wide viewport (main+0x8ecac, wider-than-16:9 branch): fmov s0,w9 (the 16:9 clamp 1.7777778) → nop (s0 keeps the full width from ucvtf w24)'),
++    (0x8ed24, '2008201e', '1f2003d5', 'wide viewport (main+0x8ecac): fmul s0,s1,s0 (height × 16:9) → nop (fcvtzu w25,s0 then yields the full width, x offset 0)'),
+   ],
+ }
+ 
+@@ -25,4 +52,12 @@ CUTS = {
+ BINDING = [
+     {'what': 'job pool wake-up', 'now': 'build', 'goal': 'game', 'purpose': 'race',
+      'why': "a lost wake-up in the game's own job pool, not a host or SDK difference"},
++    {'what': 'render size (1280x720 \u2192 1920x888, the screen-wide pair) in both its setters, the nn graphics pool reservation (1280 \u2192 1792 MiB) and the swapchain pool (16 \u2192 32 MiB)', 'now': 'build', 'goal': 'game', 'purpose': 'rendering',
++     'why': "the game's own display settings pair, which its swap chain, crop and projection are all built from; the two pools gate the larger sizes at boot",
++     'blocked': 'the two setters would need a fingerprint rule (the 5-instruction vtable slot and the 6-instruction builder of the settings struct) to move to another build',
++     'checked': "1.5.1's bytes at all four size sites, both pool movs and the wide-viewport cut are asserted by the registered cuts; the 16:9 constant search (f32 1.7777778, f64 16/9, u16/u32 1280,720) found no stored value, so the projection computes from the pair at run time"},
++    {'what': 'wide viewport (the pillarbox of any target wider than 16:9)', 'now': 'build', 'goal': 'game', 'purpose': 'rendering',
++     'why': "the render-target builder clamps its width to height \u00d7 16:9 and centers it, so the render size alone cannot widen the picture",
++     'blocked': 'the site would need a fingerprint rule (the 0x238-byte builder or its 8-instruction wider-than-16:9 branch) to move to another build',
++     'checked': "1.5.1's bytes at both cut sites are identical to 1.4.0's (main+0x8ecac / main+0x7572c, cut at +0x6c/+0x78); on 1.4.0 this ran on device at 1568x720 with projection, FOV, HUD and touch following the picture"},
+ ]

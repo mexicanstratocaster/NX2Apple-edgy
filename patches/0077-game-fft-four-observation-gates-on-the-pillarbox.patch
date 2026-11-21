@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: seedds <seedds@gmail.com>
+Date: Sat, 21 Nov 2026 00:15:19 +0000
+Subject: [PATCH] game/fft: four observation gates on the pillarbox candidates
+ (0077 pre-work: name the site that still confines the picture)
+
+The wide pair, both pools, the wide-viewport cut and the screen-shape chain are all active and the host presents 1920x888, yet the device's picture is still the game's own drawing confined to a centered 16:9 (a 1578.67x888 content rect). The gates record what the letterbox fitter's one non-null-rect call (main+0x46f2b0) and its compare/select block (main+0x45f988), the post-cut wide-viewport branch (main+0x8ed18) and the camera aspect store (main+0xdc5dc, camera+0xcd8, plus the first-layer chain the PC port's fix hides the pillarbox sprite through) see at run time, one tab-separated line per hit in Documents/pillarbox_probe.txt (PB_CALL / PB_RECT / VP_CLAMP / CAM tags, 60 MB cap), read-only.
+
+Upstream-Status: fork-only
+Reason: FFT 1.5.1's picture is still confined to a centered 16:9 in the game's own drawing past the wide-viewport cuts: the host presents 1920x888 but the content rect is 1578.67x888. Four read-only observation gates record what the letterbox fitter's call and output, the post-cut wide-viewport branch and the camera aspect store see, until a run names the site that confines it; the host side is dm/host/hle_pillarbox.c (Documents/pillarbox_probe.txt, 60 MB cap)
+Issue: mexicanstratocaster/NX2Apple-edgy#1
+
+---
+ dm/games/010038B015560000/README.md  |  2 +
+ dm/games/010038B015560000/patches.py | 16 +++++
+ dm/host/dm.h                         |  6 +-
+ dm/host/hle_pillarbox.c              | 97 ++++++++++++++++++++++++++++
+ 4 files changed, 120 insertions(+), 1 deletion(-)
+ create mode 100644 dm/host/hle_pillarbox.c
+
+diff --git a/dm/games/010038B015560000/README.md b/dm/games/010038B015560000/README.md
+index 8601f6a3..853024d5 100644
+--- a/dm/games/010038B015560000/README.md
++++ b/dm/games/010038B015560000/README.md
+@@ -64,6 +64,8 @@ On 1.4.0 (`3cfd4578...`) this route ran on device at 1568x720 (2.178:1) with pro
+ 
+ Open follow-ups, in order: the movies (the game letterboxes its own 16:9 movies; check they center on the wide picture), the touch layout at the taller picture (it followed the pair at 720 height on 1.4.0), and the messy textures in cutscenes and battle (see Open below).
+ 
++**Still pillarboxed with all of that (2026-11-21, open).** With the wide pair, both pools, the wide-viewport cut and the screen-shape chain all active (0074-0076), the device session's log shows every host stage wide (`DM_SCREEN_ASPECT=2.173` → `screen shape 2.173 wide: output 1920x880` → swap chain 1920x888 → `WindowCrop 0,0 1920x888` → `present: picture shape 1920x888`, `the game's view follows it`) - and the battlefield is *still* a centered 16:9: the phone's USB screenshots measure the in-texture content at a 1578.67x888 rect (bars 170.67 tex px, the geometry the picture-fill would put there), so the confinement happens in the game's own drawing, past the cut. Static search cleared the known candidates: `0x45f7d0`'s 16:9 clamp is dead code (its only caller passes a real rect), and the binary holds no other stored 16:9 constant. Four observation gates (the profile's `OBS`, this run's `PB_CALL` / `PB_RECT` / `VP_CLAMP` / `CAM` lines in `Documents/pillarbox_probe.txt`, hle_pillarbox.c) now record what the letterbox fitter's call and output, the post-cut wide-viewport branch and the camera aspect store see, to name the site that confines it; the PC port's widescreen fix (NexusMods FFTacticsFix) replaced five coordinated places there (the letterbox viewport calculator, the first-layer pillarbox sprite, a camera-center offset, two parallax offsets behind WorldToScreen, and the grain filter gate), a shape to mirror, not offsets to copy.
++
+ ## Open
+ 
+ - **Messy textures in cutscenes and battle** (newspaper-print noise over the picture on an iPhone 18 Pro Max, 1080p 16:9 build). The prime leads, in order: upstream [issue #2275](https://github.com/seedds/nxnative/issues/2275)'s `sampler ID 768 not registered` (one line per session in this game's device logs too, once read as benign - it drives every third frame of the CRI Mana movies and in-engine sprites to horizontal streaks, and a host fix for reading such samplers, SeparateSamplerId raw IDs from uniform-buffer words, landed 2026-11-12 and is in this engine); the 19 unbounded shader keys of `c1_full` from the update's shader build (bindings whose slot was not decoded); the 30 texture/cover pixel pairs of the DmIOS shader audit. All three sit in the project's handoff evidence; a device log of a messy-textures session with `DM_NVN_TEXINFO=1280x720` is the next probe.
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index 8d51f3da..aaa94405 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -47,6 +47,20 @@ CUTS = {
+   ],
+ }
+ 
++# Observation gates (host callbacks in dm/host/hle_pillarbox.c, numbers as there/dm.h): with the wide-viewport clamp cut, the picture still reaches the screen confined to a
++# centered 16:9 (a 1578.67x888 content rect inside the 1920x888 texture, host-side; the PC shader fix's five-piece answer names the remaining candidates), so these record what
++# the four candidate places see at run time until one run names where the confinement is made. One tab-separated line per hit in Documents/pillarbox_probe.txt (PB_CALL / PB_RECT /
++# VP_CLAMP / CAM tags), truncated at 60 MB. The original word is the value here at the rewrite: 0x8ed18's is the nop the cut above writes (a gate may sit on a cut's site, the
++# allocator constructor's does), the others' are 1.5.1's own instructions
++OBS = {
++  'ace351a145c07a51f8e239666640a0d8': [
++    (0x46f2b0, 27, 'f9400102', "pillarbox: the letterbox fitter main+0x45f7d0's one non-null-rect call (bl main+0x46f2b4): x0-x5 and the 16 bytes at [x5], the input rect"),
++    (0x45f988, 28, '1e230101', "pillarbox: the fitter's compare/select block, s0-s5 (the content pair converted and the clamped output pair with its offsets) and the integer pair w8/w11"),
++    (0x8ed18, 29, 'd503201f', "pillarbox: the wide-viewport branch after the cuts above, w23/w24/w25 (the target triple) and s0-s3 (the converted pair, the clamp constant, the product)"),
++    (0xdc5dc, 30, 'd29ae149', 'pillarbox: before the camera aspect store (str s0,[x20,#0xcd8] at +8): the camera x20, the aspect stored before, and the first-layer chain [x19+0x4d00]+0x30'),
++  ],
++}
++
+ # How general each patch is and could be (dm/tools/docs_patches.py "Binding", listed in docs/agents/game-patches.md): what, its binding now, the loosest it could have (goal),
+ # purpose, why; blocked or kept: why the gap stays open (cannot close yet, or left open on purpose); checked: what was checked on game files (else a judgement)
+ BINDING = [
+@@ -60,4 +74,6 @@ BINDING = [
+      'why': "the render-target builder clamps its width to height \u00d7 16:9 and centers it, so the render size alone cannot widen the picture",
+      'blocked': 'the site would need a fingerprint rule (the 0x238-byte builder or its 8-instruction wider-than-16:9 branch) to move to another build',
+      'checked': "1.5.1's bytes at both cut sites are identical to 1.4.0's (main+0x8ecac / main+0x7572c, cut at +0x6c/+0x78); on 1.4.0 this ran on device at 1568x720 with projection, FOV, HUD and touch following the picture"},
++    {'what': "the four pillarbox observation gates (the letterbox fitter main+0x45f7d0's caller and compare block, the wide-viewport branch after the cuts, the camera aspect store)", 'now': 'build', 'goal': 'unreviewed', 'purpose': 'rendering',
++     'why': "diagnostic, not a fix: the wide-viewport clamp is cut and every host stage runs wide (1920x888), yet the content is still a centered 16:9, so someone else confines it; these record what each candidate sees until a run names the one that does"},
+ ]
+diff --git a/dm/host/dm.h b/dm/host/dm.h
+index 4a56b3f7..7f2ccbf0 100644
+--- a/dm/host/dm.h
++++ b/dm/host/dm.h
+@@ -137,7 +137,11 @@ enum { OBS_UE_MALLOC = 21,                                       // Unreal's FMa
+        OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the SDK's address regions, gates the rewriter places by symbol in every sdk (patch_nso.py "Address regions", hle_svc.c)
+        OBS_STDALLOC_INIT = 25,                                         // StandardAllocator::Initialize's entry, the same way: its callback writes the size (hle_svc.c)
+        OBS_UE_REGION = 26,                                             // the store of Unreal's engine region size before nninitStartup reserves it: the register its upper bits name (dm/tools/ue_region.py, hle_svc.c)
+-       OBS_MAX = 27 };
++       OBS_PILLARBOX_CALL = 27,                                        // FFT 1.5.1 ace351a1: main+0x46f2b0, the letterbox fitter's (main+0x45f7d0) one non-null-rect call, the arguments and the input rect at [x5] (hle_pillarbox.c)
++       OBS_PILLARBOX_RECT = 28,                                        // FFT 1.5.1 ace351a1: main+0x45f988, the fitter's compare/select block, its s0-s5 (target and output rect floats) and w8/w11 (hle_pillarbox.c)
++       OBS_VIEWPORT_CLAMP = 29,                                        // FFT 1.5.1 ace351a1: main+0x8ed18, the wide-viewport branch after the profile's cuts, w23/w24/w25 and s0-s3 (hle_pillarbox.c)
++       OBS_CAMERA_ASPECT = 30,                                         // FFT 1.5.1 ace351a1: main+0xdc5dc, before the camera aspect store str s0,[x20,#0xcd8], and the first-layer pointer chain at [x19+0x4d00]+0x30 (hle_pillarbox.c)
++       OBS_MAX = 31 };
+ // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
+ // effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT and OBS_UE_REGION do
+ void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
+diff --git a/dm/host/hle_pillarbox.c b/dm/host/hle_pillarbox.c
+new file mode 100644
+index 00000000..77a4cb1b
+--- /dev/null
++++ b/dm/host/hle_pillarbox.c
+@@ -0,0 +1,97 @@
++// Observation of FFT 1.5.1's pillarbox (final fantasy tactics - the ivalice chronicles, main ace351a145c07a51f8e239666640a0d8). The profile's registered cuts kill the
++// wide-viewport clamp (main+0x8ed18 / +0x8ed24), yet the picture still reaches the screen confined to a centered 16:9 (a 1578.67x888 content rect in 1920x888, measured on the
++// device), so another place confines it. Four observation gates (the profile's patches.py OBS, numbered in dm.h) record what the four candidates see, one tab-separated line per
++// hit in Documents/pillarbox_probe.txt: the letterbox fitter's caller (its arguments and the input rect), the fitter's compare/select block (its target and output floats), the
++// wide-viewport branch after the cuts (the target triple and the clamped floats) and the camera aspect store (the aspect and the first-layer pointer chain). Read-only: a
++// callback changes no register, so the game runs as without them. Diagnostic for the fork's wide-aspect work; the size cap on the file keeps a long session bounded
++#include "dm.h"
++#include <errno.h>
++#include <mach/mach.h>
++#include <pthread.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <string.h>
++
++#define PB_CAP (60ull << 20)   // truncate the file back to empty once it is past this
++static pthread_mutex_t pb_mu = PTHREAD_MUTEX_INITIALIZER;
++static FILE *pb_f;
++static unsigned long long pb_seq;
++static int pb_tried;
++
++// q0..q31 follow x0..x30 in dm_gate's register frame (dm/host/entry.S): s0..s31 are their lowest 32-bit words
++#define PB_S(r, k) (*(const uint32_t *)((const char *)(r) + 256 + 4 * (k)))
++
++#define PB_LL(v) ((unsigned long long)(v))   // the x registers into %llx / %llu (uint64_t is unsigned long on these hosts)
++
++static float pb_f32(uint32_t w) { float v; memcpy(&v, &w, 4); return v; }   // the guest's f32 registers, reinterpreted
++
++// Read guest memory (the guest's own addresses are this process's, but they may point anywhere): 0 and the bytes, or -1 when unmapped
++static int pb_mem(const void *addr, size_t n, void *out) {
++    vm_size_t got = 0;
++    return !addr || vm_read_overwrite(mach_task_self(), (vm_address_t)(uintptr_t)addr, (vm_size_t)n, (vm_address_t)(uintptr_t)out, &got) != KERN_SUCCESS || got != n;
++}
++
++static void pb_line(const char *tag, const char *fmt, ...) {
++    pthread_mutex_lock(&pb_mu);
++    if (!pb_f) {
++        if (pb_tried) { pthread_mutex_unlock(&pb_mu); return; }
++        pb_tried = 1;
++        pb_f = fopen("pillarbox_probe.txt", "w");   // a relative name is from the working directory (Documents on iOS)
++        if (!pb_f) { LOG("[dm] pillarbox probe: pillarbox_probe.txt could not be opened for writing (errno %d): the gates pass through and record nothing", errno); pthread_mutex_unlock(&pb_mu); return; }
++    }
++    if (ftello(pb_f) > (off_t)PB_CAP) { fclose(pb_f); pb_f = fopen("pillarbox_probe.txt", "w"); pb_seq = 0; }   // truncated back to empty: a long session keeps overwriting the same window
++    if (pb_f) {
++        va_list ap;
++        fprintf(pb_f, "%s\t%llu\t%llu\t", tag, PB_LL(++pb_seq), PB_LL(guest_ns()));
++        va_start(ap, fmt); vfprintf(pb_f, fmt, ap); va_end(ap);
++        fputc('\n', pb_f); fflush(pb_f);
++    }
++    pthread_mutex_unlock(&pb_mu);
++}
++
++// The letterbox fitter's caller: main+0x46f2b0, the ldr x2,[x8] right before the bl main+0x45f7d0 (main+0x46f2b4) - the only caller that passes a real rect. The arguments as they
++// reach the call (x0-x5; w-written registers read as their 32-bit values) and the 16 bytes the rect pointer in x5 points at
++static void pb_call(uint64_t *r, int param) {
++    (void)param;
++    uint32_t rect[4] = {0, 0, 0, 0};
++    pb_mem((const void *)(uintptr_t)r[5], sizeof rect, rect);
++    pb_line("PB_CALL", "%llx\t%llx\t%llx\t%llx\t%llx\t%llx\t%u\t%u\t%u\t%u",
++            PB_LL(r[0]), PB_LL(r[1]), PB_LL(r[2]), PB_LL(r[3]), PB_LL(r[4]), PB_LL(r[5]),
++            rect[0], rect[1], rect[2], rect[3]);
++}
++
++// The letterbox fitter's compare/select block: main+0x45f988, after s1 = the content width and s0 = the content height are converted, before the two fcsel pick the output pair
++// (s2 = the clamped width, s3 = the clamped height, s4/s5 = the offsets). The six floats and the integer pair behind them (w8, w11)
++static void pb_rect(uint64_t *r, int param) {
++    (void)param;
++    pb_line("PB_RECT", "s0 %u %.3f\ts1 %u %.3f\ts2 %u %.3f\ts3 %u %.3f\ts4 %u %.3f\ts5 %u %.3f\tw8 %llu\tw11 %llu",
++            PB_S(r, 0), pb_f32(PB_S(r, 0)), PB_S(r, 1), pb_f32(PB_S(r, 1)), PB_S(r, 2), pb_f32(PB_S(r, 2)),
++            PB_S(r, 3), pb_f32(PB_S(r, 3)), PB_S(r, 4), pb_f32(PB_S(r, 4)), PB_S(r, 5), pb_f32(PB_S(r, 5)),
++            PB_LL(r[8]), PB_LL(r[11]));
++}
++
++// The wide-viewport branch after the profile's cuts: main+0x8ed18, the nopped fmov of the 16:9 clamp. The target words as the cut leaves them (w23, w24, w25) and the first floats
++// (s0-s3: the width as converted, the height, the clamp constant, the product) - whether the clamp yields here confirms or clears this site at run time
++static void pb_clamp(uint64_t *r, int param) {
++    (void)param;
++    pb_line("VP_CLAMP", "w23 %llu\tw24 %llu\tw25 %llu\ts0 %u %.3f\ts1 %u %.3f\ts2 %u %.3f\ts3 %u %.3f",
++            PB_LL(r[23]), PB_LL(r[24]), PB_LL(r[25]), PB_S(r, 0), pb_f32(PB_S(r, 0)), PB_S(r, 1), pb_f32(PB_S(r, 1)),
++            PB_S(r, 2), pb_f32(PB_S(r, 2)), PB_S(r, 3), pb_f32(PB_S(r, 3)));
++}
++
++// The camera aspect store: main+0xdc5dc, right before str s0,[x20,#0xcd8] (s0 there is the 1.7777778 constant) - the camera (x20), the aspect stored there before, and the
++// first-layer pointer chain the PC fix hides the pillarbox sprite through ([x19+0x4d00], then +0x30; the offsets are from FFTacticsFix's layer walk, to check whether FFT's
++// first UI layer lives at the same place)
++static void pb_camera(uint64_t *r, int param) {
++    (void)param;
++    uint32_t aspect = 0; void *layer = NULL, *first = NULL;
++    pb_mem((const void *)(uintptr_t)(r[20] + 0xcd8), 4, &aspect);
++    if (!pb_mem((const void *)(uintptr_t)(r[19] + 0x4d00), sizeof layer, &layer) && layer) pb_mem(layer, sizeof first, &first);
++    pb_line("CAM", "x19 %llx\tx20 %llx\taspect-before %.3f\tlayernull %d\tfirstnull %d",
++            PB_LL(r[19]), PB_LL(r[20]), pb_f32(aspect), !layer, !first);
++}
++
++__attribute__((constructor)) static void pillarbox_attach(void) {
++    gate_obs_set(OBS_PILLARBOX_CALL, pb_call); gate_obs_set(OBS_PILLARBOX_RECT, pb_rect);
++    gate_obs_set(OBS_VIEWPORT_CLAMP, pb_clamp); gate_obs_set(OBS_CAMERA_ASPECT, pb_camera);
++}
