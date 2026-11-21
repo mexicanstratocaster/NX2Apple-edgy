@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tanori-rider <rtanori1@asu.edu>
+Date: Fri, 20 Nov 2026 22:18:42 -0700
+Subject: [PATCH] FFT: FIT_ROUTE gate on a relocatable site + edge-to-edge fix
+ (host widen + fitter threshold)
+
+Upstream-Status: fork-only
+Reason: FFT edge-to-edge: census showed all fitter calls share one vtable and flag=1, so the guard must be by rect width; host callback widens battle rects (>=1500 px) to 1920 and the fitter's 16/9 constant is raised to the picture ratio 2.162 so a 1920-wide input is not clamped into bars. Also moves the FIT_ROUTE census gate from the non-relocatable cbz at 0x46f250 to the following mov at 0x46f258 so the rewriter can apply it.
+Issue: mexicanstratocaster/NX2Apple-edgy#1
+
+---
+ dm/games/010038B015560000/patches.py | 11 +++++++----
+ dm/host/hle_pillarbox.c              | 11 ++++++++++-
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index 229755f..5fa961e 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -53,6 +53,8 @@ CUTS = {
+     (0x4e20c, '095ac0f2', '096fc0f2', 'bake record size pair: movk x9,#0x2d0,lsl#32 (height 720) → movk x9,#0x378,lsl#32 (height 888), the 0x17914 shape'),
+     (0x4e29c, '0aa080d2', '0af080d2', 'bake record size pair, the growth copy of 0x4e200: mov x10,#0x500 (width 1280) → mov x10,#0x780 (width 1920)'),
+     (0x4e2a8, '0a5ac0f2', '0a6fc0f2', 'bake record size pair, the growth copy of 0x4e20c: movk x10,#0x2d0,lsl#32 (height 720) → movk x10,#0x378,lsl#32 (height 888)'),
++    (0x45f918, '2cc79152', 'ac1b8c52', 'fitter aspect constant: mov w12,#0x8e39 (16/9 low) → mov w12,#0x60dd (2.162 low, the picture ratio 1920/888)'),
++    (0x45f91c, '6cfca772', '4c01a872', 'fitter aspect constant: movk w12,#0x3fe3,lsl#16 (16/9 high) → movk w12,#0x400a,lsl#16 (2.162 high)'),
+   ],
+ }
+ 
+@@ -82,11 +84,12 @@ OBS = {
+     # mechanism: the battle layer object reaches the fitter with its own float rect [x21+0xd0..0xde] = (32, 0, 1632, 888) - width 1632 = 1920*0.85, x = 32 = the fixed safe-area
+     # margin, steady for the whole session with small eased transients (1646..1664 x2 = w+32) - and the fitter (main+0x45f7d0) centers that width into the 1920 frame: FIT_B =
+     # (144, 0, 1776, 888) = the (1920-1632)/2 = 144 bars a side that the screenshot measures. The layer rect writer is runtime arithmetic (f32/f64/u32/instruction sweeps all
+-    # exhausted, 0 hits), so the census must name the object class instead: this gate at the routing cbz (main+0x46f250, flag [x21+0x1ec] picks the fitter at +0x46f2b4 vs the
+-    # alternate at +0x46f2bc) sits on a site both paths pass through, logging the flag as tested, the flag field, the object and its vtable, the stack rect, and s0/s2 - the
+-    # distribution that decides whether the planned (0,0,1920,888) input cut (0x46f230 mov w8,#0 / 0x46f238 mov w10,#0x780) can be guarded to the battle layer only, since the
++    # exhausted, 0 hits), so the census must name the object class instead: the routing cbz (main+0x46f250, flag [x21+0x1ec] picks the fitter at +0x46f2b4 vs the
++    # alternate at +0x46f2bc) sits just before this gate's site; the gate is on the following mov (main+0x46f258, the first relocatable instruction on the fall-through path), which
++    # runs only for the fitter path and after both stack-rect stps, so the census captures the fitter-path object classes with a complete rect and the same register state the cbz
++    # would have. The distribution decides whether the planned (0,0,1920,888) input cut (0x46f230 mov w8,#0 / 0x46f238 mov w10,#0x780) can be guarded to the battle layer only, since the
+     # same callsite also passes the small UI rects ((32,554,628..778) family) that must not become full-screen
+-    (0x46f250, 37, '34000368', "pillarbox: the fitter routing cbz w8 on [x21+0x1ec]: the flag as the cbz tests it, the flag field, x21 and its vtable, the stack rect (x,y,x2,y2) at [x29-0x20], and the layer rect floats s0/s2 - the object-class census that guards a cut of the same callsite"),
++    (0x46f258, 37, '528a0a0a', "pillarbox: the fitter routing on the fall-through path (mov w10,#0x5050 at main+0x46f258, after the cbz w8 at +0x46f250): w8 still holds the routing flag [x21+0x1ec], x21 and its vtable, the now-complete stack rect (x,y,x2,y2) at [x29-0x20], and the layer rect floats s0/s2 - the object-class census that guards a cut of the same callsite"),
+   ],
+ }
+ 
+diff --git a/dm/host/hle_pillarbox.c b/dm/host/hle_pillarbox.c
+index 143f9e5..ffdb520 100644
+--- a/dm/host/hle_pillarbox.c
++++ b/dm/host/hle_pillarbox.c
+@@ -67,6 +67,14 @@ static void pb_call(uint64_t *r, int param) {
+     (void)param;
+     uint32_t rect[4] = {0, 0, 0, 0};
+     pb_mem((const void *)(uintptr_t)r[5], sizeof rect, rect);
++    // Edge-to-edge fix: battle rects (width >= 1500) get widened to the full picture width before the fitter runs, so the fitter's 16:9 clamp (which would otherwise center them into
++    // ~171 px bars) has nothing to clamp. UI rects (< 1500) are left untouched. The fitter's threshold is also raised to the picture ratio (see patches.py) so a 1920-wide input is not
++    // clamped. vm_write goes through the kernel (same path as hle_cheats), the guest's pages are writable from here.
++    if (r[5] && rect[2] > rect[0] && (rect[2] - rect[0]) >= 1500) {
++        uint32_t wrect[4] = {0, rect[1], 1920, rect[3]};
++        vm_write(mach_task_self(), (vm_address_t)(uintptr_t)r[5], (vm_offset_t)(uintptr_t)wrect, (mach_msg_type_number_t)sizeof wrect);
++        rect[0] = wrect[0]; rect[2] = wrect[2];
++    }
+     pb_line("PB_CALL", "%llx\t%llx\t%llx\t%llx\t%llx\t%llx\t%u\t%u\t%u\t%u",
+             PB_LL(r[0]), PB_LL(r[1]), PB_LL(r[2]), PB_LL(r[3]), PB_LL(r[4]), PB_LL(r[5]),
+             rect[0], rect[1], rect[2], rect[3]);
+@@ -152,7 +160,8 @@ static void pb_fit_src(uint64_t *r, int param) {
+ }
+ 
+ // The fitter routing point: main+0x46f250, the cbz w8 on the layer's routing flag [x21+0x1ec] (flag != 0 falls through to the fitter call at main+0x46f2b4, flag == 0 branches to the
+-// alternate path at main+0x46f2bc). The gate sits on the cbz itself, so both paths pass through it and the cbz re-executes after the callback. Logged: the flag as the cbz tests it
++// alternate path at main+0x46f2bc). The gate could not sit on the cbz itself (the rewriter cannot relocate a branch), so it sits on the following mov (main+0x46f258) on the
++// fall-through path only, after both stack-rect stps have run; the cbz itself is untouched and re-executes normally. Logged: the flag as the cbz tests it
+ // (w8), the flag field read back from the layer, the layer object (x21) and its first word (the vtable, to tag object classes across rows), the stack rect (x,y,x2,y2) the call is
+ // about to pass (16 bytes at [x29-0x20], built at main+0x46f244/0x46f24c), and the layer rect floats s0/s2 (x and w before the integer conversion). This answers, in one run,
+ // which object classes and flag values reach the fitter: whether a consumer-side cut can be guarded to the battle layer, and whether the small UI rects share the same vtable class
