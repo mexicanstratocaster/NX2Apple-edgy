@@ -73,3 +73,4 @@
 0083-nvn-hoist-the-pillarbox-scissor-viewport-census.patch
 0084-fft-the-fitter-routing-census-gate-37-at-main-0x.patch
 0085-fft-fit-route-gate-on-a-relocatable-site-edge-to.patch
+0086-fft-zero-the-fitter-s-path-b-centering-offset-fo.patch
