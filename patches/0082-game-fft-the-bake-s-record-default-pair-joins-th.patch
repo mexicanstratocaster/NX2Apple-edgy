@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tanori-rider <rtanori1@asu.edu>
+Date: Fri, 20 Nov 2026 19:11:23 -0700
+Subject: [PATCH] game/fft: the bake's record default pair joins the live pair
+ (1920x888) - the battle bars' source
+
+0x4e160 pushes bake-command records whose size pair is instruction-immediate (1280,720), twice (record + growth copy: 0x4e200/0x4e20c and 0x4e29c/0x4e2a8) - the stale 16:9 pair of the display-settings originals. Height-fitted to the 888-tall frame: 1280x888/720 = 1578.67 wide, centered, 170.67 bars a side - the measured battle letterbox to the pixel - while TBK_PAIR (0078) showed the bake itself receives (1920,888). All four immediates join the live pair (1920,888). Hex in file byte order; originals asserted by patch_nso.py against the v524288 binary (preflight), patched words decoder-verified (movz #0x780 / movk #0x378 - the 0x17914 shape).
+
+Upstream-Status: fork-only
+Reason: The battle letterbox cut: the bake-command record builder main+0x4e160 defaults every record size pair to instruction-immediate (1280, 720) - the stale 16:9 pair of the display-settings originals. Height-fitted onto the 888-tall frame that is 1280x888/720 = 1578.67 wide + 170.67 bars a side, pixel-identical to the measured battle letterbox (revD), while TBK_PAIR (0078) showed the bake itself receives (1920, 888). Four word cuts set the record default pair (both copies) to (1920, 888)
+Issue: mexicanstratocaster/NX2Apple-edgy#1: LNPANDY/NX2Apple#<n>
+
+---
+ dm/games/010038B015560000/patches.py | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dm/games/010038B015560000/patches.py b/dm/games/010038B015560000/patches.py
+index 893d145..0771064 100644
+--- a/dm/games/010038B015560000/patches.py
++++ b/dm/games/010038B015560000/patches.py
+@@ -44,6 +44,15 @@ CUTS = {
+     (0xf1c4, '0220a052', '0240a052', 'swapchain pool: mov w2,#0x1000000 (16 MiB) → mov w2,#0x2000000 (32 MiB): the segment allocator cannot serve a swapchain past 16 MiB and the allocation fails into the nvnMemoryPoolMap(NULL) crash - 1920x888 needs about 20.5 MiB, 1080p 23.7'),
+     (0x8ed18, '2001271e', '1f2003d5', 'wide viewport (main+0x8ecac, wider-than-16:9 branch): fmov s0,w9 (the 16:9 clamp 1.7777778) → nop (s0 keeps the full width from ucvtf w24)'),
+     (0x8ed24, '2008201e', '1f2003d5', 'wide viewport (main+0x8ecac): fmul s0,s1,s0 (height × 16:9) → nop (fcvtzu w25,s0 then yields the full width, x offset 0)'),
++    # The bake's command-record default pair (main+0x4e160, single caller main+0x3bf90, the bake orchestrator after the swap-chain crop/bake fn main+0x3b770): 0x4e160 pushes
++    # 0x18-byte records whose size pair is baked as instruction immediates, (1280, 720) at main+0x4e200/0x4e20c and again at main+0x4e29c/0x4e2a8 (the record-array growth
++    # copy) - the stale 16:9 pair of the display-settings originals at 0x17910/0x17914. Fitted by height onto the 888-tall frame, that pair renders the content
++    # 1280x888/720 = 1578.67 wide, centered ((1920-1578.67)/2 = 170.67 black bars a side) - pixel-identical to the measured battle letterbox (revD) - while the pair the bake
++    # itself receives is already (1920, 888) (TBK_PAIR at main+0x3bd30, patch 0078). The default is the confinement: make it the live pair.
++    (0x4e200, '09a080d2', '09f080d2', 'bake record size pair: mov x9,#0x500 (width 1280) → mov x9,#0x780 (width 1920): the pair the record defaults to - the source of the battle bars'),
++    (0x4e20c, '095ac0f2', '096fc0f2', 'bake record size pair: movk x9,#0x2d0,lsl#32 (height 720) → movk x9,#0x378,lsl#32 (height 888), the 0x17914 shape'),
++    (0x4e29c, '0aa080d2', '0af080d2', 'bake record size pair, the growth copy of 0x4e200: mov x10,#0x500 (width 1280) → mov x10,#0x780 (width 1920)'),
++    (0x4e2a8, '0a5ac0f2', '0a6fc0f2', 'bake record size pair, the growth copy of 0x4e20c: movk x10,#0x2d0,lsl#32 (height 720) → movk x10,#0x378,lsl#32 (height 888)'),
+   ],
+ }
+ 
